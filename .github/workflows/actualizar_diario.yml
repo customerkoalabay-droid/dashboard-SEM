@@ -23,8 +23,13 @@ jobs:
       - name: Instalar dependencias
         run: pip install gspread google-auth facebook-business pandas
 
-      - name: Ejecutar script
+      - name: Actualizar Meta Ads
         env:
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
           META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
         run: python actualizar_meta.py
+
+      - name: Actualizar Google Ads
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+        run: python actualizar_google_ads.py
