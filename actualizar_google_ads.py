@@ -241,13 +241,21 @@ def main():
             # Abrir sheet de origen
             sheet_origen = gc.open_by_key(config["sheet_id"])
             ws_origen    = sheet_origen.worksheet(config["pestaña"])
-            datos        = ws_origen.get_all_records()
 
-            if not datos:
+            # Leer con get_all_values para evitar error de headers duplicados (columnas vacias de Google Ads)
+            valores = ws_origen.get_all_values()
+            if not valores or len(valores) < 2:
                 log(f"  ⚠️  '{config['pestaña']}' está vacía, saltando...")
                 continue
 
-            df = pd.DataFrame(datos)
+            # Limpiar columnas vacías
+            headers = valores[0]
+            indices_validos = [i for i, h in enumerate(headers) if h.strip() != ""]
+            headers_limpios = [headers[i] for i in indices_validos]
+            filas_limpias   = [[fila[i] if i < len(fila) else "" for i in indices_validos] for fila in valores[1:]]
+            filas_limpias   = [f for f in filas_limpias if any(v.strip() != "" for v in f)]
+
+            df = pd.DataFrame(filas_limpias, columns=headers_limpios)
             log(f"   {len(df)} filas leídas")
 
             # Limpiar y normalizar
