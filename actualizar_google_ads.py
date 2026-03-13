@@ -6,8 +6,8 @@ los limpia y normaliza, y los vuelca al Sheet principal del dashboard.
 
 Hojas de origen (Google Ads → Sheets):
   - Campañas:          1saU4aeiEn9I9bcxg60rkhqJZKYKfpdqz6q7fO2NWGWA  (pestaña: "Campañas Gads a Sheets")
-  - Grupos de anuncios: 1hXnrcmfXww-fuf-W1bD2_nvamKjx0kiQNt6JVgdct1U  (pestaña: "GRUPOS DE ANUNCIOS A SHEETS")
-  - Anuncios:          1ROJL13zPjZJOJOBt5oTfTUU9hscZS5ill3gX7fZXbF4  (pestaña: "anuncios a sheets")
+  - Grupos de anuncios: 19x-ds9L2_kOYZ_pYilii43KJu64GEwh-e4k5WtjorwQ  (pestaña: "GRUPOS DE ANUNCIOS A SHEETS")
+  - Anuncios:          1w4jEdHRIGYe8k1C-43Kql7eSwfII-Ang7lZiVHbfJK0  (pestaña: "anuncios a sheets")
 
 Hoja destino (dashboard principal):
   - SHEET_ID definido abajo → pestañas: gads_campaigns, gads_adgroups, gads_ads
