@@ -18,7 +18,7 @@ Uso:
 Requisitos:
     pip install gspread google-auth pandas
 """
-
+"""
 import json
 import os
 import time
@@ -311,12 +311,12 @@ def _write_in_chunks(ws, data, chunk_rows=5000):
     headers = data[0]
     rows    = data[1:]
     # Escribir headers primero
-    ws.update([headers], value_input_option="USER_ENTERED")
+    ws.update(values=[headers], range_name="A1", value_input_option="USER_ENTERED")
     # Escribir filas en chunks
     for start in range(0, len(rows), chunk_rows):
         chunk = rows[start:start + chunk_rows]
         row_start = start + 2  # +1 por header, +1 porque Sheets es 1-indexed
-        ws.update(f"A{row_start}", chunk, value_input_option="USER_ENTERED")
+        ws.update(values=chunk, range_name=f"A{row_start}", value_input_option="USER_ENTERED")
         time.sleep(1)  # pausa para no saturar la API
 
 
