@@ -188,14 +188,24 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
     for intento in range(3):
         try:
             ws = sheet.worksheet(nombre_pestaña)
-            existentes = ws.get_all_records()
 
-            if not existentes:
+            # Usar get_all_values para evitar error con headers duplicados/vacíos
+            valores_exist = ws.get_all_values()
+
+            if not valores_exist or len(valores_exist) < 2:
+                ws.clear()
                 ws.update([df.columns.tolist()] + df.fillna("").values.tolist())
                 log(f"  ✅ '{nombre_pestaña}': {len(df)} filas escritas (primera vez)")
                 return
 
-            df_exist  = pd.DataFrame(existentes)
+            # Reconstruir df existente limpiando columnas vacías
+            h_exist = valores_exist[0]
+            idx_validos = [i for i, h in enumerate(h_exist) if h.strip() != ""]
+            h_limpios = [h_exist[i] for i in idx_validos]
+            filas_exist = [[fila[i] if i < len(fila) else "" for i in idx_validos] for fila in valores_exist[1:]]
+            filas_exist = [f for f in filas_exist if any(v.strip() != "" for v in f)]
+
+            df_exist = pd.DataFrame(filas_exist, columns=h_limpios)
 
             # Filtrar claves que existen en ambos dataframes
             claves_validas = [c for c in claves if c in df.columns and c in df_exist.columns]
@@ -248,15 +258,33 @@ def main():
                 log(f"  ⚠️  '{config['pestaña']}' está vacía, saltando...")
                 continue
 
+            # Google Ads exporta filas de metadata antes de los headers reales:
+            # Fila 1: nombre del informe
+            # Fila 2: rango de fechas
+            # Fila 3: headers reales (contienen "Día", "Campaña", etc.)
+            # Detectar la fila de headers reales buscando la que tenga más columnas no vacías
+            # y que contenga palabras clave típicas de Google Ads
+            PALABRAS_CLAVE_HEADER = {"día", "dia", "campaña", "campana", "grupo", "anuncio",
+                                      "clics", "impresiones", "coste", "conversiones", "ctr"}
+            fila_header_idx = 0
+            for i, fila in enumerate(valores):
+                celdas_no_vacias = [c.strip().lower() for c in fila if c.strip() != ""]
+                if any(p in celdas_no_vacias for p in PALABRAS_CLAVE_HEADER):
+                    fila_header_idx = i
+                    break
+
+            log(f"   Headers reales detectados en fila {fila_header_idx + 1}")
+
             # Limpiar columnas vacías
-            headers = valores[0]
+            headers = valores[fila_header_idx]
             indices_validos = [i for i, h in enumerate(headers) if h.strip() != ""]
             headers_limpios = [headers[i] for i in indices_validos]
-            filas_limpias   = [[fila[i] if i < len(fila) else "" for i in indices_validos] for fila in valores[1:]]
+            filas_limpias   = [[fila[i] if i < len(fila) else "" for i in indices_validos]
+                                for fila in valores[fila_header_idx + 1:]]
             filas_limpias   = [f for f in filas_limpias if any(v.strip() != "" for v in f)]
 
             df = pd.DataFrame(filas_limpias, columns=headers_limpios)
-            log(f"   {len(df)} filas leídas")
+            log(f"   {len(df)} filas leídas (columnas: {list(df.columns[:5])}...)")
 
             # Limpiar y normalizar
             df = limpiar_df(df)
