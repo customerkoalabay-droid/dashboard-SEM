@@ -2,7 +2,7 @@ name: Actualizar Meta Ads diario
 
 on:
   schedule:
-    - cron: '0 7 * * *'  # Cada día a las 7:00 UTC (8:00 España invierno / 9:00 verano)
+    - cron: '0 5 * * *'  # Cada día a las 7:00 UTC (8:00 España invierno / 9:00 verano)
   workflow_dispatch:       # Permite ejecutarlo manualmente desde GitHub
 
 jobs:
@@ -27,7 +27,7 @@ jobs:
         env:
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
           META_ACCESS_TOKEN: ${{ secrets.META_ACCESS_TOKEN }}
-        run: python actualizar_meta.py
+        run: echo "Meta desactivado"
 
       - name: Actualizar Google Ads
         env:
