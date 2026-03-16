@@ -30,7 +30,7 @@ from google.oauth2.service_account import Credentials
 # ============================================================
 SHEET_ID      = "1j84VyucNRrRx7haLKm16ppRuaL28p5BaX75D4BHaqWs"  # Dashboard Shopify
 PESTANA       = "shopify_orders"
-DIAS_ATRAS    = 440  # ventana de actualización diaria
+DIAS_ATRAS    = 14  # ventana de actualización diaria
 
 SHOPIFY_STORE  = os.environ.get("SHOPIFY_STORE", "koalabay")
 SHOPIFY_KEY    = os.environ.get("SHOPIFY_API_KEY")
@@ -90,41 +90,68 @@ def shopify_get(endpoint, params=None, token=None):
 
 
 def obtener_pedidos(fecha_inicio, fecha_fin, token):
-    """Obtiene todos los pedidos en el rango de fechas dado."""
-    pedidos = []
-    params = {
-        "status":         "any",
-        "created_at_min": fecha_inicio,
-        "created_at_max": fecha_fin,
-        "limit":          250,
-        "fields": (
-            "id,created_at,financial_status,fulfillment_status,"
-            "total_price,subtotal_price,total_discounts,currency,"
-            "billing_address,shipping_address,"
-            "landing_site,referring_site,source_name,"
-            "line_items,tags"
-        ),
-    }
+    """Obtiene todos los pedidos en el rango de fechas dado, iterando por meses."""
+    todos_pedidos = []
 
-    page = 1
-    while True:
-        log(f"   Página {page}...")
-        resp = shopify_get("orders.json", params, token=token)
-        data = resp.json().get("orders", [])
-        pedidos.extend(data)
+    # Convertir a datetime para iterar por meses
+    dt_inicio = datetime.strptime(fecha_inicio[:10], "%Y-%m-%d")
+    dt_fin    = datetime.strptime(fecha_fin[:10], "%Y-%m-%d")
 
-        link_header = resp.headers.get("Link", "")
-        if 'rel="next"' not in link_header:
-            break
+    # Iterar mes a mes para evitar límites de Shopify en rangos largos
+    cursor = dt_inicio
+    while cursor <= dt_fin:
+        mes_fin = min(
+            datetime(cursor.year, cursor.month + 1 if cursor.month < 12 else 1,
+                     1, tzinfo=None) - timedelta(days=1)
+            if cursor.month < 12
+            else datetime(cursor.year + 1, 1, 1) - timedelta(days=1),
+            dt_fin
+        )
 
-        match = re.search(r'<[^>]*page_info=([^&>]+)[^>]*>;\s*rel="next"', link_header)
-        if not match:
-            break
-        params = {"limit": 250, "page_info": match.group(1)}
-        page += 1
-        time.sleep(0.5)
+        rango_inicio = cursor.strftime("%Y-%m-%dT00:00:00Z")
+        rango_fin    = mes_fin.strftime("%Y-%m-%dT23:59:59Z")
+        log(f"   📅 Mes: {rango_inicio[:7]}...")
 
-    return pedidos
+        params = {
+            "status":         "any",
+            "created_at_min": rango_inicio,
+            "created_at_max": rango_fin,
+            "limit":          250,
+            "fields": (
+                "id,created_at,financial_status,fulfillment_status,"
+                "total_price,subtotal_price,total_discounts,currency,"
+                "billing_address,shipping_address,"
+                "landing_site,referring_site,source_name,"
+                "line_items,tags"
+            ),
+        }
+
+        page = 1
+        while True:
+            log(f"      Página {page}...")
+            resp = shopify_get("orders.json", params, token=token)
+            data = resp.json().get("orders", [])
+            todos_pedidos.extend(data)
+
+            link_header = resp.headers.get("Link", "")
+            if 'rel="next"' not in link_header:
+                break
+
+            match = re.search(r'<[^>]*page_info=([^&>]+)[^>]*>;\s*rel="next"', link_header)
+            if not match:
+                break
+            params = {"limit": 250, "page_info": match.group(1)}
+            page += 1
+            time.sleep(0.5)
+
+        # Avanzar al mes siguiente
+        if cursor.month == 12:
+            cursor = datetime(cursor.year + 1, 1, 1)
+        else:
+            cursor = datetime(cursor.year, cursor.month + 1, 1)
+        time.sleep(1)
+
+    return todos_pedidos
 
 
 # ── Parseo de pedidos ────────────────────────────────────────
