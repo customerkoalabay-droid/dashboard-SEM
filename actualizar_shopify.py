@@ -271,7 +271,7 @@ def upsert_sheet(sheet, df, nombre_pestana, claves):
             df_merged = (
                 pd.concat([df_exist, df], ignore_index=True)
                   .drop_duplicates(subset=claves_merge, keep="last")
-                  .sort_values(by=claves_merge[0], ascending=False)
+                  .sort_values(by=claves_merge[0], ascending=False, key=lambda x: x.astype(str))
             )
 
             ws.clear()
