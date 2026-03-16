@@ -31,25 +31,25 @@ from google.oauth2.service_account import Credentials
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
-SHEET_ID = "1evv-YemzQfKFUr4mZyLEqne2ALqPD6v8rzFUlp68fcE"  # Dashboard principal
+SHEET_ID = "1QV-qOoxjdgBNAwxlqYcKyj-EJ_KAEIS8J7TjHsPm0go"  # Dashboard Google Ads
 
 FUENTES = {
     "gads_campaigns": {
-        "sheet_id":  "17vla3I2EOcmbWeU5VLl-GzrC54sFUjjh2LAKJGJbsJw",
+        "sheet_id":  "12DF3xp3p_1jh4NKfWCivARkYp5XCs65wj8zQam7W_lw",
         "pestana":   "Campañas a Sheets",
         # Columnas reales: Dia, Campana, Tipo estrategia puja, Dia semana, Hora del dia
         # Granularidad: un registro por fecha+campana+hora (hay varias filas por dia/campana)
         "claves":    ["fecha", "campana", "hora_del_dia"],
     },
     "gads_adgroups": {
-        "sheet_id":  "17eCCCG-yb-XdWNpS7_HBnrzG09wTSqWj5OKAzeYvaFY",
+        "sheet_id":  "19U2XU1C_vhUfANkSt_zBizLqb1JGvk7_44eMH0QIwhQ",
         "pestana":   "GRUPOS DE ANUNCIOS A SHEETS",
         # Columnas reales: Dia, Grupo de anuncios, Tipo estrategia, Ciudad, Pais
         # No tiene columna Campana — clave: fecha + grupo + ciudad
         "claves":    ["fecha", "grupo_de_anuncios", "ciudad_ubicacion_de_usuario"],
     },
     "gads_ads": {
-        "sheet_id":  "1rOcWg6lN4xInfiqrSKPsw3sNHJ9WtadXIDjJkc1Ewas",
+        "sheet_id":  "1b0Qb4koO_0ouW9Oqn4a6sM0HXed5QihSDmmjoaf_bvE",
         "pestana":   "anuncios a sheets",
         # Columnas reales: Dia, Sexo, Edad, Campana, Grupo de anuncios (segmentacion demografica)
         "claves":    ["fecha", "campana", "grupo_de_anuncios", "sexo", "edad"],
