@@ -236,10 +236,14 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
     log(f"   Claves buscadas: {claves}")
 
     # Verificar qué claves existen realmente
-    claves_validas = [c for c in claves if c in df.columns]
-    if not claves_validas:
-        log(f"  ⚠️  Ninguna clave {claves} encontrada en columnas del df. "
-            f"Volcando todo sin deduplicar.")
+    if claves is None:
+        log(f"   Deduplicando por todas las columnas")
+        claves_validas = None
+    else:
+        claves_validas = [c for c in claves if c in df.columns]
+        if not claves_validas:
+            log(f"  ⚠️  Ninguna clave {claves} encontrada en columnas del df. "
+                f"Volcando todo sin deduplicar.")
 
     for intento in range(3):
         try:
@@ -247,10 +251,9 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
             valores_exist = ws.get_all_values()
 
             # Si la hoja destino está vacía o solo tiene headers → escribir directo
-            if not valores_exist or len(valores_exist) < 2 or not claves_validas:
+            if not valores_exist or len(valores_exist) < 2 or claves_validas == []:
                 ws.clear()
                 data = [df.columns.tolist()] + df.fillna("").values.tolist()
-                # Escribir en chunks de 50.000 celdas para evitar límite de API
                 _write_in_chunks(ws, data)
                 log(f"  ✅ '{nombre_pestaña}': {len(df)} filas escritas")
                 return
@@ -266,20 +269,23 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
             filas_exist  = [f for f in filas_exist if any(v.strip() != "" for v in f)]
             df_exist     = pd.DataFrame(filas_exist, columns=h_limpios)
 
-            # Claves que existen en AMBOS dataframes
-            claves_merge = [c for c in claves_validas if c in df_exist.columns]
-            if not claves_merge:
-                log(f"  ⚠️  Claves no coinciden con hoja destino existente. Reescribiendo todo.")
-                ws.clear()
-                data = [df.columns.tolist()] + df.fillna("").values.tolist()
-                _write_in_chunks(ws, data)
-                log(f"  ✅ '{nombre_pestaña}': {len(df)} filas escritas (reescritura completa)")
-                return
+            # Claves que existen en AMBOS dataframes (o todas las columnas si claves=None)
+            if claves_validas is None:
+                claves_merge = None  # deduplicar por todas las columnas
+            else:
+                claves_merge = [c for c in claves_validas if c in df_exist.columns]
+                if not claves_merge:
+                    log(f"  ⚠️  Claves no coinciden con hoja destino existente. Reescribiendo todo.")
+                    ws.clear()
+                    data = [df.columns.tolist()] + df.fillna("").values.tolist()
+                    _write_in_chunks(ws, data)
+                    log(f"  ✅ '{nombre_pestaña}': {len(df)} filas escritas (reescritura completa)")
+                    return
 
             df_merged = (
                 pd.concat([df_exist, df], ignore_index=True)
                   .drop_duplicates(subset=claves_merge, keep="last")
-                  .sort_values(by=claves_merge[0], ascending=False)
+                  .sort_values(by=(claves_merge[0] if claves_merge else df.columns[0]), ascending=False)
             )
 
             ws.clear()
