@@ -30,7 +30,7 @@ from google.oauth2.service_account import Credentials
 # ============================================================
 SHEET_ID      = "1j84VyucNRrRx7haLKm16ppRuaL28p5BaX75D4BHaqWs"  # Dashboard Shopify
 PESTANA       = "shopify_orders"
-DIAS_ATRAS    = 14  # ventana de actualización diaria
+DIAS_ATRAS    = 440  # ventana de actualización diaria
 
 SHOPIFY_STORE  = os.environ.get("SHOPIFY_STORE", "koalabay")
 SHOPIFY_KEY    = os.environ.get("SHOPIFY_API_KEY")
