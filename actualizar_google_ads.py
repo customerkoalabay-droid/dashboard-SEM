@@ -385,7 +385,9 @@ def main():
             time.sleep(2)
 
         except Exception as e:
+            import traceback
             log(f"  ❌ Error procesando {nombre_destino}: {e}")
+            log(f"      {traceback.format_exc()}")
 
         log("─" * 50)
 
