@@ -62,12 +62,26 @@ def conectar_sheets():
 
 # ── Shopify API ──────────────────────────────────────────────
 
-def shopify_get(endpoint, params=None):
-    """Hace una petición GET a la API de Shopify con autenticación básica."""
+def obtener_access_token():
+    """Obtiene un access token de Shopify via OAuth client credentials."""
+    url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/oauth/access_token"
+    resp = requests.post(url, data={
+        "grant_type":    "client_credentials",
+        "client_id":     SHOPIFY_KEY,
+        "client_secret": SHOPIFY_SECRET,
+    }, timeout=30)
+    resp.raise_for_status()
+    token = resp.json().get("access_token")
+    log(f"✅ Token Shopify obtenido")
+    return token
+
+
+def shopify_get(endpoint, params=None, token=None):
+    """Hace una petición GET a la API de Shopify con access token."""
     url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/{endpoint}"
     response = requests.get(
         url,
-        auth=(SHOPIFY_KEY, SHOPIFY_SECRET),
+        headers={"X-Shopify-Access-Token": token},
         params=params or {},
         timeout=30,
     )
@@ -75,11 +89,11 @@ def shopify_get(endpoint, params=None):
     return response
 
 
-def obtener_pedidos(fecha_inicio, fecha_fin):
+def obtener_pedidos(fecha_inicio, fecha_fin, token):
     """Obtiene todos los pedidos en el rango de fechas dado."""
     pedidos = []
     params = {
-        "status":        "any",
+        "status":         "any",
         "created_at_min": fecha_inicio,
         "created_at_max": fecha_fin,
         "limit":          250,
@@ -95,22 +109,20 @@ def obtener_pedidos(fecha_inicio, fecha_fin):
     page = 1
     while True:
         log(f"   Página {page}...")
-        resp = shopify_get("orders.json", params)
+        resp = shopify_get("orders.json", params, token=token)
         data = resp.json().get("orders", [])
         pedidos.extend(data)
 
-        # Paginación via Link header
         link_header = resp.headers.get("Link", "")
         if 'rel="next"' not in link_header:
             break
 
-        # Extraer page_info del link header
         match = re.search(r'<[^>]*page_info=([^&>]+)[^>]*>;\s*rel="next"', link_header)
         if not match:
             break
         params = {"limit": 250, "page_info": match.group(1)}
         page += 1
-        time.sleep(0.5)  # respetar rate limit
+        time.sleep(0.5)
 
     return pedidos
 
@@ -295,9 +307,14 @@ def main():
     log("✅ Conectado")
     log("─" * 50)
 
+    # Obtener token Shopify
+    log("🔑 Autenticando con Shopify...")
+    token = obtener_access_token()
+    log("─" * 50)
+
     # Obtener pedidos
     log("📥 Obteniendo pedidos de Shopify...")
-    pedidos = obtener_pedidos(fecha_inicio_str, fecha_fin_str)
+    pedidos = obtener_pedidos(fecha_inicio_str, fecha_fin_str, token)
     log(f"   {len(pedidos)} pedidos obtenidos")
 
     if not pedidos:
