@@ -36,22 +36,20 @@ SHEET_ID = "1QV-qOoxjdgBNAwxlqYcKyj-EJ_KAEIS8J7TjHsPm0go"  # Dashboard Google Ad
 FUENTES = {
     "gads_campaigns": {
         "sheet_id":  "12DF3xp3p_1jh4NKfWCivARkYp5XCs65wj8zQam7W_lw",
-        "pestana":   "Gads_campaigns",
-        # Columnas reales: Dia, Campana, Tipo estrategia puja, Dia semana, Hora del dia
-        # Granularidad: un registro por fecha+campana+hora (hay varias filas por dia/campana)
+        "pestana":   "Campañas a Sheets",
+        "destino":   "Gads_campaigns",
         "claves":    ["fecha", "campana", "hora_del_dia"],
     },
     "gads_adgroups": {
         "sheet_id":  "19U2XU1C_vhUfANkSt_zBizLqb1JGvk7_44eMH0QIwhQ",
-        "pestana":   "Gads_adgroups",
-        # Columnas reales: Dia, Grupo de anuncios, Tipo estrategia, Ciudad, Pais
-        # No tiene columna Campana — clave: fecha + grupo + ciudad
+        "pestana":   "GRUPOS DE ANUNCIOS A SHEETS",
+        "destino":   "Gads_adgroups",
         "claves":    ["fecha", "grupo_de_anuncios", "ciudad_ubicacion_de_usuario"],
     },
     "gads_ads": {
         "sheet_id":  "1b0Qb4koO_0ouW9Oqn4a6sM0HXed5QihSDmmjoaf_bvE",
-        "pestana":   "Gads_ads",
-        # Columnas reales: Dia, Sexo, Edad, Campana, Grupo de anuncios (segmentacion demografica)
+        "pestana":   "anuncios a sheets",
+        "destino":   "Gads_ads",
         "claves":    ["fecha", "campana", "grupo_de_anuncios", "sexo", "edad"],
     },
 }
@@ -383,7 +381,7 @@ def main():
             log(f"   {len(df)} filas tras limpieza")
 
             # Volcar al dashboard
-            upsert_sheet(sheet, df, nombre_destino, config["claves"])
+            upsert_sheet(sheet, df, config.get("destino", nombre_destino), config["claves"])
             time.sleep(2)
 
         except Exception as e:
