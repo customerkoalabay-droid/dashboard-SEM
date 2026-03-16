@@ -1,16 +1,15 @@
-name: Actualizar Meta Ads diario
+name: Actualizar dashboard diario
 
 on:
   schedule:
-    - cron: '0 5 * * *'  # Cada día a las 7:00 UTC (8:00 España invierno / 9:00 verano)
-  workflow_dispatch:       # Permite ejecutarlo manualmente desde GitHub
+    - cron: '0 7 * * *'  # 8:00h España invierno / 9:00h verano
+  workflow_dispatch:
 
 jobs:
   actualizar:
     runs-on: ubuntu-latest
     env:
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
-
     steps:
       - name: Clonar repositorio
         uses: actions/checkout@v4
@@ -21,7 +20,7 @@ jobs:
           python-version: '3.11'
 
       - name: Instalar dependencias
-        run: pip install gspread google-auth facebook-business pandas
+        run: pip install gspread google-auth facebook-business pandas requests
 
       - name: Actualizar Meta Ads
         env:
@@ -32,4 +31,12 @@ jobs:
       - name: Actualizar Google Ads
         env:
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
-        run: echo "Google Ads desactivado temporalmente"
+        run: python actualizar_google_ads.py
+
+      - name: Actualizar Shopify
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          SHOPIFY_API_KEY: ${{ secrets.SHOPIFY_API_KEY }}
+          SHOPIFY_API_SECRET: ${{ secrets.SHOPIFY_API_SECRET }}
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+        run: python actualizar_shopify.py
