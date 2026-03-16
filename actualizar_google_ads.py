@@ -36,19 +36,19 @@ SHEET_ID = "1QV-qOoxjdgBNAwxlqYcKyj-EJ_KAEIS8J7TjHsPm0go"  # Dashboard Google Ad
 FUENTES = {
     "gads_campaigns": {
         "sheet_id":  "12DF3xp3p_1jh4NKfWCivARkYp5XCs65wj8zQam7W_lw",
-        "pestana":   "Campañas a Sheets",
+        "pestana":   "Gads_campaigns",
         "destino":   "Gads_campaigns",
         "claves":    ["fecha", "campana", "hora_del_dia"],
     },
     "gads_adgroups": {
         "sheet_id":  "19U2XU1C_vhUfANkSt_zBizLqb1JGvk7_44eMH0QIwhQ",
-        "pestana":   "GRUPOS DE ANUNCIOS A SHEETS",
+        "pestana":   "Gads_adgroups",
         "destino":   "Gads_adgroups",
         "claves":    ["fecha", "grupo_de_anuncios", "ciudad_ubicacion_de_usuario"],
     },
     "gads_ads": {
         "sheet_id":  "1b0Qb4koO_0ouW9Oqn4a6sM0HXed5QihSDmmjoaf_bvE",
-        "pestana":   "anuncios a sheets",
+        "pestana":   "Gads_ads",
         "destino":   "Gads_ads",
         "claves":    ["fecha", "campana", "grupo_de_anuncios", "sexo", "edad"],
     },
