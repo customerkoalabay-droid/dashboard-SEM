@@ -1,0 +1,29 @@
+name: Actualizar Shopify (pruebas)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  actualizar:
+    runs-on: ubuntu-latest
+    env:
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+    steps:
+      - name: Clonar repositorio
+        uses: actions/checkout@v4
+
+      - name: Configurar Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+
+      - name: Instalar dependencias
+        run: pip install gspread google-auth pandas requests
+
+      - name: Actualizar Shopify
+        env:
+          GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
+          SHOPIFY_API_KEY: ${{ secrets.SHOPIFY_API_KEY }}
+          SHOPIFY_API_SECRET: ${{ secrets.SHOPIFY_API_SECRET }}
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+        run: python actualizar_shopify.py
