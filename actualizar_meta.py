@@ -39,7 +39,7 @@ DIAS_ATRAS = 450
 
 # Tamaño del chunk en días para llamadas granulares (ad/breakdowns)
 # Si sigue dando rate limit, bajar a 15
-CHUNK_DAYS = 30
+CHUNK_DAYS = 15
 
 # Pausa entre chunks (segundos) — aumentar si hay rate limit frecuente
 PAUSA_ENTRE_CHUNKS = 5
