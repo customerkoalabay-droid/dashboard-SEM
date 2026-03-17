@@ -34,7 +34,7 @@ AD_ACCOUNT_ID     = "act_122669098066867"
 SHEET_ID          = "1evv-YemzQfKFUr4mZyLEqne2ALqPD6v8rzFUlp68fcE"
 
 # Días hacia atrás a descargar (8 para cubrir ventana de atribución de 7 días)
-DIAS_ATRAS = 8
+DIAS_ATRAS = 450
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
