@@ -5,7 +5,7 @@ Lee los informes de Google Ads exportados a Google Sheets,
 los limpia y normaliza, y los vuelca al Sheet principal del dashboard.
 
 Hojas de origen (Google Ads → Sheets):
-  - Campañas:          1saU4aeiEn9I9bcxg60rkhqJZKYKfpdqz6q7fO2NWGWA  (pestaña: "Campañas Gads a Sheets")
+  - Campañas:          18tZ5MEuM_yFfyVws08X4-YyKyrzlN4DlbNA8FWEZrXo  (pestaña: "Campañas Gads a Sheets")
   - Grupos de anuncios: 1hXnrcmfXww-fuf-W1bD2_nvamKjx0kiQNt6JVgdct1U  (pestaña: "GRUPOS DE ANUNCIOS A SHEETS")
   - Anuncios:          1ROJL13zPjZJOJOBt5oTfTUU9hscZS5ill3gX7fZXbF4  (pestaña: "anuncios a sheets")
 
@@ -35,19 +35,19 @@ SHEET_ID = "1QV-qOoxjdgBNAwxlqYcKyj-EJ_KAEIS8J7TjHsPm0go"  # Dashboard Google Ad
 
 FUENTES = {
     "gads_campaigns": {
-        "sheet_id":  "12DF3xp3p_1jh4NKfWCivARkYp5XCs65wj8zQam7W_lw",
+        "sheet_id":  "18tZ5MEuM_yFfyVws08X4-YyKyrzlN4DlbNA8FWEZrXo",
         "pestana":   "Gads_campaigns",
         "destino":   "Gads_campaigns",
         "claves":    ["fecha", "campana", "hora_del_dia"],
     },
     "gads_adgroups": {
-        "sheet_id":  "19U2XU1C_vhUfANkSt_zBizLqb1JGvk7_44eMH0QIwhQ",
+        "sheet_id":  "16gpwIudl9xG3NeeOHrBm5pWvJcJLsFdREvB4fEEl-3k",
         "pestana":   "Gads_adgroups",
         "destino":   "Gads_adgroups",
         "claves":    ["fecha", "grupo_de_anuncios", "ciudad_ubicacion_de_usuario"],
     },
     "gads_ads": {
-        "sheet_id":  "1b0Qb4koO_0ouW9Oqn4a6sM0HXed5QihSDmmjoaf_bvE",
+        "sheet_id":  "1J060ChzpqQ7pv2z2yJbukpZYMH233OZq4xtkQY8ccfE",
         "pestana":   "Gads_ads",
         "destino":   "Gads_ads",
         "claves":    ["fecha", "campana", "grupo_de_anuncios", "sexo", "edad"],
