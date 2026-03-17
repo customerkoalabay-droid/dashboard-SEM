@@ -1,4 +1,4 @@
-name: Actualizar dashboard diario
+name: Actualizar Google Ads
 
 on:
     workflow_dispatch:
