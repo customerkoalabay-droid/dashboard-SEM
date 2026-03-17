@@ -22,6 +22,7 @@ import gspread
 import pandas as pd
 from facebook_business.adobjects.adaccount import AdAccount
 from facebook_business.api import FacebookAdsApi
+from facebook_business.exceptions import FacebookRequestError
 from google.oauth2.service_account import Credentials
 
 # ============================================================
@@ -37,8 +38,15 @@ SHEET_ID          = "1evv-YemzQfKFUr4mZyLEqne2ALqPD6v8rzFUlp68fcE"
 DIAS_ATRAS = 450
 
 # Tamaño del chunk en días para llamadas granulares (ad/breakdowns)
-# Bajar a 15 si algún breakdown sigue dando error 500
+# Si sigue dando rate limit, bajar a 15
 CHUNK_DAYS = 30
+
+# Pausa entre chunks (segundos) — aumentar si hay rate limit frecuente
+PAUSA_ENTRE_CHUNKS = 5
+
+# Reintentos ante rate limit: espera inicial y multiplicador exponencial
+RETRY_WAIT_INICIAL = 60   # segundos
+RETRY_MAX_INTENTOS = 5
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -64,6 +72,39 @@ def chunked_date_ranges(desde, hasta, chunk_days=30):
         ranges.append((cursor.strftime("%Y-%m-%d"), tramo_fin.strftime("%Y-%m-%d")))
         cursor = tramo_fin + timedelta(days=1)
     return ranges
+
+
+# ── Retry con backoff exponencial ───────────────────────────
+
+def get_insights_con_retry(account, fields, params):
+    """
+    Llama a account.get_insights con reintentos ante rate limit (código 4 / 17 / 32).
+    Devuelve una lista con todos los resultados del cursor.
+    """
+    codigos_rate_limit = {4, 17, 32, 613}
+    espera = RETRY_WAIT_INICIAL
+
+    for intento in range(1, RETRY_MAX_INTENTOS + 1):
+        try:
+            rows = []
+            cursor = account.get_insights(fields=fields, params=params)
+            for item in cursor:
+                rows.append(item)
+            return rows
+
+        except FacebookRequestError as e:
+            codigo = e.api_error_code()
+            if codigo in codigos_rate_limit:
+                if intento < RETRY_MAX_INTENTOS:
+                    log(f"   ⏳ Rate limit (código {codigo}). "
+                        f"Esperando {espera}s antes del intento {intento + 1}/{RETRY_MAX_INTENTOS}...")
+                    time.sleep(espera)
+                    espera *= 2  # backoff exponencial
+                else:
+                    log(f"   ❌ Rate limit persistente tras {RETRY_MAX_INTENTOS} intentos. Abortando chunk.")
+                    raise
+            else:
+                raise
 
 
 # ── Autenticación ────────────────────────────────────────────
@@ -105,9 +146,6 @@ def parsear_conversiones(insight):
 
 
 def get_campaign_metrics(account, desde, hasta):
-    """
-    Nivel adset — se aplica chunking igualmente para consistencia y seguridad.
-    """
     fields = ["campaign_name", "adset_name", "impressions", "clicks",
               "spend", "reach", "ctr", "cpc", "actions"]
     params_base = {
@@ -118,7 +156,8 @@ def get_campaign_metrics(account, desde, hasta):
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
         log(f"   → Chunk {chunk_desde} / {chunk_hasta}")
         params = {**params_base, "time_range": {"since": chunk_desde, "until": chunk_hasta}}
-        for i in account.get_insights(fields=fields, params=params):
+        items = get_insights_con_retry(account, fields, params)
+        for i in items:
             conv, _ = parsear_conversiones(i)
             all_rows.append({
                 "fecha":        i.get("date_start"),
@@ -132,14 +171,11 @@ def get_campaign_metrics(account, desde, hasta):
                 "cpc":          i.get("cpc", 0),
                 "conversiones": conv,
             })
-        time.sleep(1)
+        time.sleep(PAUSA_ENTRE_CHUNKS)
     return pd.DataFrame(all_rows)
 
 
 def get_creative_performance(account, desde, hasta):
-    """
-    Nivel ad — muy granular, requiere chunking obligatorio.
-    """
     fields = ["ad_name", "adset_name", "campaign_name", "impressions",
               "clicks", "spend", "ctr", "cpc", "actions"]
     params_base = {
@@ -150,7 +186,8 @@ def get_creative_performance(account, desde, hasta):
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
         log(f"   → Chunk {chunk_desde} / {chunk_hasta}")
         params = {**params_base, "time_range": {"since": chunk_desde, "until": chunk_hasta}}
-        for i in account.get_insights(fields=fields, params=params):
+        items = get_insights_con_retry(account, fields, params)
+        for i in items:
             conv, _ = parsear_conversiones(i)
             all_rows.append({
                 "fecha":        i.get("date_start"),
@@ -164,15 +201,11 @@ def get_creative_performance(account, desde, hasta):
                 "cpc":          i.get("cpc", 0),
                 "conversiones": conv,
             })
-        time.sleep(1)
+        time.sleep(PAUSA_ENTRE_CHUNKS)
     return pd.DataFrame(all_rows)
 
 
 def get_breakdown(account, breakdown, desde, hasta, nivel="adset"):
-    """
-    Breakdowns demográficos / plataforma / dispositivo / país.
-    Chunking obligatorio para rangos largos.
-    """
     fields = ["campaign_name", "adset_name", "impressions", "clicks",
               "spend", "reach", "ctr", "cpc", "actions", "action_values"]
     params_base = {
@@ -184,7 +217,8 @@ def get_breakdown(account, breakdown, desde, hasta, nivel="adset"):
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
         log(f"   → Chunk {chunk_desde} / {chunk_hasta}")
         params = {**params_base, "time_range": {"since": chunk_desde, "until": chunk_hasta}}
-        for i in account.get_insights(fields=fields, params=params):
+        items = get_insights_con_retry(account, fields, params)
+        for i in items:
             conv, valor = parsear_conversiones(i)
             row = {
                 "fecha":              i.get("date_start"),
@@ -212,7 +246,7 @@ def get_breakdown(account, breakdown, desde, hasta, nivel="adset"):
             elif breakdown == ["country"]:
                 row["pais"]        = i.get("country")
             all_rows.append(row)
-        time.sleep(1)
+        time.sleep(PAUSA_ENTRE_CHUNKS)
     return pd.DataFrame(all_rows)
 
 
@@ -289,7 +323,8 @@ def main():
     hasta = ayer.strftime("%Y-%m-%d")
 
     total_chunks = len(chunked_date_ranges(desde, hasta, CHUNK_DAYS))
-    log(f"🚀 Actualizando datos del {desde} al {hasta} ({total_chunks} chunks de {CHUNK_DAYS} días)")
+    log(f"🚀 Actualizando datos del {desde} al {hasta} "
+        f"({total_chunks} chunks de {CHUNK_DAYS} días)")
     log("─" * 50)
 
     log("🔑 Conectando a Google Sheets...")
