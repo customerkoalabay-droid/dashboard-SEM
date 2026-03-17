@@ -37,22 +37,30 @@ SHEET_ID          = "1evv-YemzQfKFUr4mZyLEqne2ALqPD6v8rzFUlp68fcE"
 # Días hacia atrás a descargar
 DIAS_ATRAS = 450
 
-# Tamaño del chunk en días para llamadas granulares (ad/breakdowns)
-# Si sigue dando rate limit, bajar a 15
+# Tamaño del chunk en días
 CHUNK_DAYS = 15
 
-# Pausa entre chunks (segundos) — aumentar si hay rate limit frecuente
+# Pausa entre chunks (segundos)
 PAUSA_ENTRE_CHUNKS = 5
 
-# Reintentos ante rate limit: espera inicial y multiplicador exponencial
+# Retry: espera inicial y máximo de intentos
 RETRY_WAIT_INICIAL = 60   # segundos
-RETRY_MAX_INTENTOS = 5
+RETRY_MAX_INTENTOS = 6
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
 # ============================================================
+
+# Códigos de error de Meta que merecen reintento
+CODIGOS_RETRY = {
+    2,    # Service temporarily unavailable (transitorio)
+    4,    # Application request limit reached
+    17,   # User request limit reached
+    32,   # Page-level throttling
+    613,  # Calls to this API have exceeded the rate limit
+}
 
 
 def log(msg):
@@ -61,7 +69,7 @@ def log(msg):
 
 # ── Utilidades de fechas ─────────────────────────────────────
 
-def chunked_date_ranges(desde, hasta, chunk_days=30):
+def chunked_date_ranges(desde, hasta, chunk_days=15):
     """Divide un rango de fechas en trozos de chunk_days días."""
     inicio = datetime.strptime(desde, "%Y-%m-%d")
     fin    = datetime.strptime(hasta, "%Y-%m-%d")
@@ -74,14 +82,16 @@ def chunked_date_ranges(desde, hasta, chunk_days=30):
     return ranges
 
 
-# ── Retry con backoff exponencial ───────────────────────────
+# ── Retry con backoff exponencial a nivel de página ──────────
 
 def get_insights_con_retry(account, fields, params):
     """
-    Llama a account.get_insights con reintentos ante rate limit (código 4 / 17 / 32).
-    Devuelve una lista con todos los resultados del cursor.
+    Itera el cursor de get_insights página a página con retry ante
+    errores transitorios (códigos 2, 4, 17, 32, 613).
+
+    Si falla a mitad de paginación, reintenta desde el principio
+    del chunk con backoff exponencial.
     """
-    codigos_rate_limit = {4, 17, 32, 613}
     espera = RETRY_WAIT_INICIAL
 
     for intento in range(1, RETRY_MAX_INTENTOS + 1):
@@ -94,16 +104,17 @@ def get_insights_con_retry(account, fields, params):
 
         except FacebookRequestError as e:
             codigo = e.api_error_code()
-            if codigo in codigos_rate_limit:
-                if intento < RETRY_MAX_INTENTOS:
-                    log(f"   ⏳ Rate limit (código {codigo}). "
-                        f"Esperando {espera}s antes del intento {intento + 1}/{RETRY_MAX_INTENTOS}...")
-                    time.sleep(espera)
-                    espera *= 2  # backoff exponencial
-                else:
-                    log(f"   ❌ Rate limit persistente tras {RETRY_MAX_INTENTOS} intentos. Abortando chunk.")
-                    raise
+            es_transitorio = e.api_transient_error() or (codigo in CODIGOS_RETRY)
+
+            if es_transitorio and intento < RETRY_MAX_INTENTOS:
+                log(f"   ⏳ Error transitorio (código {codigo}). "
+                    f"Esperando {espera}s antes del intento {intento + 1}/{RETRY_MAX_INTENTOS}...")
+                time.sleep(espera)
+                espera = min(espera * 2, 600)  # máximo 10 minutos de espera
             else:
+                if intento >= RETRY_MAX_INTENTOS:
+                    log(f"   ❌ Error persistente tras {RETRY_MAX_INTENTOS} intentos "
+                        f"(código {codigo}). Abortando.")
                 raise
 
 
