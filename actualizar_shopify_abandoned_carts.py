@@ -13,7 +13,7 @@ from google.oauth2.service_account import Credentials
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
-SHEET_ID      = "1j84VyucNRrRx7haLKm16ppRuaL28p5BaX75D4BHaqWs"
+SHEET_ID      = "16dNKOZSXchArtlv4RR4iV6nkXoi9epBQNwaO3tFSwA8"
 PESTANA       = "shopify_abandoned_checkouts"  # Asegúrate de crear esta pestaña
 DIAS_ATRAS    = 440 
 
