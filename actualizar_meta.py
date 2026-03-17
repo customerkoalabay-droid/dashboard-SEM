@@ -1,7 +1,7 @@
 """
 actualizar_meta.py
 ------------------
-Script de actualización diaria: descarga los últimos 8 días de Meta Ads
+Script de actualización diaria: descarga los últimos N días de Meta Ads
 y hace upsert en Google Sheets (no borra el histórico).
 
 Autenticación: Google Service Account (compatible con GitHub Actions)
@@ -33,8 +33,12 @@ META_APP_ID       = "794814423158870"
 AD_ACCOUNT_ID     = "act_122669098066867"
 SHEET_ID          = "1evv-YemzQfKFUr4mZyLEqne2ALqPD6v8rzFUlp68fcE"
 
-# Días hacia atrás a descargar (8 para cubrir ventana de atribución de 7 días)
+# Días hacia atrás a descargar
 DIAS_ATRAS = 450
+
+# Tamaño del chunk en días para llamadas granulares (ad/breakdowns)
+# Bajar a 15 si algún breakdown sigue dando error 500
+CHUNK_DAYS = 30
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -45,6 +49,21 @@ SCOPES = [
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+
+
+# ── Utilidades de fechas ─────────────────────────────────────
+
+def chunked_date_ranges(desde, hasta, chunk_days=30):
+    """Divide un rango de fechas en trozos de chunk_days días."""
+    inicio = datetime.strptime(desde, "%Y-%m-%d")
+    fin    = datetime.strptime(hasta, "%Y-%m-%d")
+    ranges = []
+    cursor = inicio
+    while cursor <= fin:
+        tramo_fin = min(cursor + timedelta(days=chunk_days - 1), fin)
+        ranges.append((cursor.strftime("%Y-%m-%d"), tramo_fin.strftime("%Y-%m-%d")))
+        cursor = tramo_fin + timedelta(days=1)
+    return ranges
 
 
 # ── Autenticación ────────────────────────────────────────────
@@ -58,10 +77,8 @@ def conectar_sheets():
     sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT")
 
     if sa_json:
-        # GitHub Actions: credenciales en variable de entorno
         info = json.loads(sa_json)
     else:
-        # Local: credenciales en archivo
         with open("service_account.json", "r") as f:
             info = json.load(f)
 
@@ -88,96 +105,115 @@ def parsear_conversiones(insight):
 
 
 def get_campaign_metrics(account, desde, hasta):
+    """
+    Nivel adset — se aplica chunking igualmente para consistencia y seguridad.
+    """
     fields = ["campaign_name", "adset_name", "impressions", "clicks",
               "spend", "reach", "ctr", "cpc", "actions"]
-    params = {
+    params_base = {
         "level": "adset",
-        "time_range": {"since": desde, "until": hasta},
         "time_increment": 1,
     }
-    rows = []
-    for i in account.get_insights(fields=fields, params=params):
-        conv, _ = parsear_conversiones(i)
-        rows.append({
-            "fecha":        i.get("date_start"),
-            "campaña":      i.get("campaign_name"),
-            "adset":        i.get("adset_name"),
-            "impresiones":  i.get("impressions", 0),
-            "clics":        i.get("clicks", 0),
-            "gasto":        i.get("spend", 0),
-            "alcance":      i.get("reach", 0),
-            "ctr":          i.get("ctr", 0),
-            "cpc":          i.get("cpc", 0),
-            "conversiones": conv,
-        })
-    return pd.DataFrame(rows)
+    all_rows = []
+    for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
+        log(f"   → Chunk {chunk_desde} / {chunk_hasta}")
+        params = {**params_base, "time_range": {"since": chunk_desde, "until": chunk_hasta}}
+        for i in account.get_insights(fields=fields, params=params):
+            conv, _ = parsear_conversiones(i)
+            all_rows.append({
+                "fecha":        i.get("date_start"),
+                "campaña":      i.get("campaign_name"),
+                "adset":        i.get("adset_name"),
+                "impresiones":  i.get("impressions", 0),
+                "clics":        i.get("clicks", 0),
+                "gasto":        i.get("spend", 0),
+                "alcance":      i.get("reach", 0),
+                "ctr":          i.get("ctr", 0),
+                "cpc":          i.get("cpc", 0),
+                "conversiones": conv,
+            })
+        time.sleep(1)
+    return pd.DataFrame(all_rows)
 
 
 def get_creative_performance(account, desde, hasta):
+    """
+    Nivel ad — muy granular, requiere chunking obligatorio.
+    """
     fields = ["ad_name", "adset_name", "campaign_name", "impressions",
               "clicks", "spend", "ctr", "cpc", "actions"]
-    params = {
+    params_base = {
         "level": "ad",
-        "time_range": {"since": desde, "until": hasta},
         "time_increment": 1,
     }
-    rows = []
-    for i in account.get_insights(fields=fields, params=params):
-        conv, _ = parsear_conversiones(i)
-        rows.append({
-            "fecha":        i.get("date_start"),
-            "anuncio":      i.get("ad_name"),
-            "adset":        i.get("adset_name"),
-            "campaña":      i.get("campaign_name"),
-            "impresiones":  i.get("impressions", 0),
-            "clics":        i.get("clicks", 0),
-            "gasto":        i.get("spend", 0),
-            "ctr":          i.get("ctr", 0),
-            "cpc":          i.get("cpc", 0),
-            "conversiones": conv,
-        })
-    return pd.DataFrame(rows)
+    all_rows = []
+    for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
+        log(f"   → Chunk {chunk_desde} / {chunk_hasta}")
+        params = {**params_base, "time_range": {"since": chunk_desde, "until": chunk_hasta}}
+        for i in account.get_insights(fields=fields, params=params):
+            conv, _ = parsear_conversiones(i)
+            all_rows.append({
+                "fecha":        i.get("date_start"),
+                "anuncio":      i.get("ad_name"),
+                "adset":        i.get("adset_name"),
+                "campaña":      i.get("campaign_name"),
+                "impresiones":  i.get("impressions", 0),
+                "clics":        i.get("clicks", 0),
+                "gasto":        i.get("spend", 0),
+                "ctr":          i.get("ctr", 0),
+                "cpc":          i.get("cpc", 0),
+                "conversiones": conv,
+            })
+        time.sleep(1)
+    return pd.DataFrame(all_rows)
 
 
 def get_breakdown(account, breakdown, desde, hasta, nivel="adset"):
+    """
+    Breakdowns demográficos / plataforma / dispositivo / país.
+    Chunking obligatorio para rangos largos.
+    """
     fields = ["campaign_name", "adset_name", "impressions", "clicks",
               "spend", "reach", "ctr", "cpc", "actions", "action_values"]
-    params = {
+    params_base = {
         "level": nivel,
-        "time_range": {"since": desde, "until": hasta},
         "time_increment": 1,
         "breakdowns": breakdown,
     }
-    rows = []
-    for i in account.get_insights(fields=fields, params=params):
-        conv, valor = parsear_conversiones(i)
-        row = {
-            "fecha":              i.get("date_start"),
-            "campaña":            i.get("campaign_name"),
-            "adset":              i.get("adset_name"),
-            "impresiones":        i.get("impressions", 0),
-            "clics":              i.get("clicks", 0),
-            "gasto":              i.get("spend", 0),
-            "alcance":            i.get("reach", 0),
-            "ctr":                i.get("ctr", 0),
-            "cpc":                i.get("cpc", 0),
-            "conversiones":       conv,
-            "valor_conversiones": valor,
-            "mercado":            extraer_mercado(i.get("campaign_name")),
-            "tipo_campaña":       extraer_tipo(i.get("campaign_name")),
-        }
-        if breakdown == ["age", "gender"]:
-            row["edad"]       = i.get("age")
-            row["genero"]     = i.get("gender")
-        elif breakdown == ["publisher_platform", "platform_position"]:
-            row["plataforma"] = i.get("publisher_platform")
-            row["placement"]  = i.get("platform_position")
-        elif breakdown == ["impression_device"]:
-            row["dispositivo"] = i.get("impression_device")
-        elif breakdown == ["country"]:
-            row["pais"] = i.get("country")
-        rows.append(row)
-    return pd.DataFrame(rows)
+    all_rows = []
+    for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
+        log(f"   → Chunk {chunk_desde} / {chunk_hasta}")
+        params = {**params_base, "time_range": {"since": chunk_desde, "until": chunk_hasta}}
+        for i in account.get_insights(fields=fields, params=params):
+            conv, valor = parsear_conversiones(i)
+            row = {
+                "fecha":              i.get("date_start"),
+                "campaña":            i.get("campaign_name"),
+                "adset":              i.get("adset_name"),
+                "impresiones":        i.get("impressions", 0),
+                "clics":              i.get("clicks", 0),
+                "gasto":              i.get("spend", 0),
+                "alcance":            i.get("reach", 0),
+                "ctr":                i.get("ctr", 0),
+                "cpc":                i.get("cpc", 0),
+                "conversiones":       conv,
+                "valor_conversiones": valor,
+                "mercado":            extraer_mercado(i.get("campaign_name")),
+                "tipo_campaña":       extraer_tipo(i.get("campaign_name")),
+            }
+            if breakdown == ["age", "gender"]:
+                row["edad"]        = i.get("age")
+                row["genero"]      = i.get("gender")
+            elif breakdown == ["publisher_platform", "platform_position"]:
+                row["plataforma"]  = i.get("publisher_platform")
+                row["placement"]   = i.get("platform_position")
+            elif breakdown == ["impression_device"]:
+                row["dispositivo"] = i.get("impression_device")
+            elif breakdown == ["country"]:
+                row["pais"]        = i.get("country")
+            all_rows.append(row)
+        time.sleep(1)
+    return pd.DataFrame(all_rows)
 
 
 # ── Clasificación ────────────────────────────────────────────
@@ -252,7 +288,8 @@ def main():
     desde = (ayer - timedelta(days=DIAS_ATRAS - 1)).strftime("%Y-%m-%d")
     hasta = ayer.strftime("%Y-%m-%d")
 
-    log(f"🚀 Actualizando datos del {desde} al {hasta}")
+    total_chunks = len(chunked_date_ranges(desde, hasta, CHUNK_DAYS))
+    log(f"🚀 Actualizando datos del {desde} al {hasta} ({total_chunks} chunks de {CHUNK_DAYS} días)")
     log("─" * 50)
 
     log("🔑 Conectando a Google Sheets...")
