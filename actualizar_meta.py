@@ -43,9 +43,9 @@ CHUNK_DAYS = 15
 # Pausa entre chunks (segundos)
 PAUSA_ENTRE_CHUNKS = 5
 
-# Retry: espera inicial y máximo de intentos
-RETRY_WAIT_INICIAL = 60   # segundos
-RETRY_MAX_INTENTOS = 6
+# Reintentos ante errores transitorios
+RETRY_WAIT_INICIAL = 60   # segundos — se duplica en cada reintento
+RETRY_MAX_INTENTOS = 4    # tras estos intentos, se salta el chunk y continúa
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -53,14 +53,8 @@ SCOPES = [
 ]
 # ============================================================
 
-# Códigos de error de Meta que merecen reintento
-CODIGOS_RETRY = {
-    2,    # Service temporarily unavailable (transitorio)
-    4,    # Application request limit reached
-    17,   # User request limit reached
-    32,   # Page-level throttling
-    613,  # Calls to this API have exceeded the rate limit
-}
+# Códigos que se reintentan siempre, independientemente de is_transient
+CODIGOS_REINTENTABLES = {2, 4, 17, 32, 613}
 
 
 def log(msg):
@@ -82,15 +76,14 @@ def chunked_date_ranges(desde, hasta, chunk_days=15):
     return ranges
 
 
-# ── Retry con backoff exponencial a nivel de página ──────────
+# ── Retry con backoff exponencial + skip si el chunk es irrecuperable ────────
 
-def get_insights_con_retry(account, fields, params):
+def get_insights_con_retry(account, fields, params, label=""):
     """
-    Itera el cursor de get_insights página a página con retry ante
-    errores transitorios (códigos 2, 4, 17, 32, 613).
-
-    Si falla a mitad de paginación, reintenta desde el principio
-    del chunk con backoff exponencial.
+    Llama a account.get_insights con reintentos ante errores transitorios.
+    - Reintenta siempre los códigos en CODIGOS_REINTENTABLES (ignora is_transient).
+    - Si tras RETRY_MAX_INTENTOS sigue fallando, devuelve [] y logea advertencia
+      para no abortar el script por un único chunk problemático.
     """
     espera = RETRY_WAIT_INICIAL
 
@@ -104,36 +97,33 @@ def get_insights_con_retry(account, fields, params):
 
         except FacebookRequestError as e:
             codigo = e.api_error_code()
-            es_transitorio = e.api_transient_error() or (codigo in CODIGOS_RETRY)
+            debe_reintentar = codigo in CODIGOS_REINTENTABLES or e.api_transient_error()
 
-            if es_transitorio and intento < RETRY_MAX_INTENTOS:
-                log(f"   ⏳ Error transitorio (código {codigo}). "
-                    f"Esperando {espera}s antes del intento {intento + 1}/{RETRY_MAX_INTENTOS}...")
+            if debe_reintentar and intento < RETRY_MAX_INTENTOS:
+                log(f"   ⏳ Error Meta código {codigo}{' [' + label + ']' if label else ''}. "
+                    f"Esperando {espera}s (intento {intento}/{RETRY_MAX_INTENTOS - 1})...")
                 time.sleep(espera)
-                espera = min(espera * 2, 600)  # máximo 10 minutos de espera
+                espera = min(espera * 2, 600)
             else:
-                if intento >= RETRY_MAX_INTENTOS:
-                    log(f"   ❌ Error persistente tras {RETRY_MAX_INTENTOS} intentos "
-                        f"(código {codigo}). Abortando.")
-                raise
+                # Chunk irrecuperable: logeamos y devolvemos vacío para no romper el script
+                log(f"   ⚠️  Chunk saltado{' [' + label + ']' if label else ''} "
+                    f"tras {intento} intento(s) — código {codigo}: {e.api_error_message()}")
+                return []
+
+        except Exception as e:
+            log(f"   ⚠️  Error inesperado{' [' + label + ']' if label else ''}: {e}")
+            return []
 
 
 # ── Autenticación ────────────────────────────────────────────
 
 def conectar_sheets():
-    """
-    Autenticación via Service Account.
-    Lee las credenciales desde la variable de entorno GOOGLE_SERVICE_ACCOUNT
-    (GitHub Actions) o desde el archivo service_account.json (local).
-    """
     sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT")
-
     if sa_json:
         info = json.loads(sa_json)
     else:
         with open("service_account.json", "r") as f:
             info = json.load(f)
-
     creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     return gspread.authorize(creds)
 
@@ -159,15 +149,13 @@ def parsear_conversiones(insight):
 def get_campaign_metrics(account, desde, hasta):
     fields = ["campaign_name", "adset_name", "impressions", "clicks",
               "spend", "reach", "ctr", "cpc", "actions"]
-    params_base = {
-        "level": "adset",
-        "time_increment": 1,
-    }
+    params_base = {"level": "adset", "time_increment": 1}
     all_rows = []
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
         log(f"   → Chunk {chunk_desde} / {chunk_hasta}")
         params = {**params_base, "time_range": {"since": chunk_desde, "until": chunk_hasta}}
-        items = get_insights_con_retry(account, fields, params)
+        items = get_insights_con_retry(account, fields, params,
+                                       label=f"campaign_metrics {chunk_desde}")
         for i in items:
             conv, _ = parsear_conversiones(i)
             all_rows.append({
@@ -189,15 +177,13 @@ def get_campaign_metrics(account, desde, hasta):
 def get_creative_performance(account, desde, hasta):
     fields = ["ad_name", "adset_name", "campaign_name", "impressions",
               "clicks", "spend", "ctr", "cpc", "actions"]
-    params_base = {
-        "level": "ad",
-        "time_increment": 1,
-    }
+    params_base = {"level": "ad", "time_increment": 1}
     all_rows = []
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
         log(f"   → Chunk {chunk_desde} / {chunk_hasta}")
         params = {**params_base, "time_range": {"since": chunk_desde, "until": chunk_hasta}}
-        items = get_insights_con_retry(account, fields, params)
+        items = get_insights_con_retry(account, fields, params,
+                                       label=f"creative {chunk_desde}")
         for i in items:
             conv, _ = parsear_conversiones(i)
             all_rows.append({
@@ -228,7 +214,8 @@ def get_breakdown(account, breakdown, desde, hasta, nivel="adset"):
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
         log(f"   → Chunk {chunk_desde} / {chunk_hasta}")
         params = {**params_base, "time_range": {"since": chunk_desde, "until": chunk_hasta}}
-        items = get_insights_con_retry(account, fields, params)
+        items = get_insights_con_retry(account, fields, params,
+                                       label=f"{breakdown[0]} {chunk_desde}")
         for i in items:
             conv, valor = parsear_conversiones(i)
             row = {
@@ -285,6 +272,10 @@ def extraer_tipo(nombre):
 # ── Upsert en Google Sheets ──────────────────────────────────
 
 def upsert_sheet(sheet, df, nombre_pestaña, claves):
+    if df.empty:
+        log(f"  ⚠️  '{nombre_pestaña}': DataFrame vacío, se omite escritura.")
+        return
+
     for intento in range(3):
         try:
             ws = sheet.worksheet(nombre_pestaña)
