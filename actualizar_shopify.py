@@ -277,14 +277,14 @@ def parsear_pedido(pedido, tasas):
 
     # ── Descuentos ───────────────────────────────────────────
     discount_codes = pedido.get("discount_codes", [])
-    codigos_dcto   = ", ".join([d.get("code", "") for d in discount_codes if d.get("code")])
-    tipo_dcto      = ", ".join([d.get("type", "") for d in discount_codes if d.get("type")])
+    codigos_dcto   = ", ".join([safe_str(d.get("code")) for d in discount_codes if d.get("code")])
+    tipo_dcto      = ", ".join([safe_str(d.get("type")) for d in discount_codes if d.get("type")])
 
     # ── Productos ────────────────────────────────────────────
     line_items   = pedido.get("line_items", [])
     num_items    = sum(li.get("quantity", 1) for li in line_items)
     productos    = " | ".join([
-        f"{li.get('name', '?')} x{li.get('quantity', 1)}"
+        f"{safe_str(li.get('name')) or '?'} x{li.get('quantity', 1)}"
         for li in line_items
     ])
     skus         = " | ".join([
@@ -299,8 +299,8 @@ def parsear_pedido(pedido, tasas):
 
     # ── Envío ────────────────────────────────────────────────
     shipping_lines  = pedido.get("shipping_lines", [])
-    metodo_envio    = " | ".join([s.get("title", "") for s in shipping_lines])
-    carrier_envio   = " | ".join([s.get("source", "") for s in shipping_lines])
+    metodo_envio    = " | ".join([safe_str(s.get("title"))  for s in shipping_lines])
+    carrier_envio   = " | ".join([safe_str(s.get("source")) for s in shipping_lines])
 
     # ── Fulfillments ─────────────────────────────────────────
     fulfillments      = pedido.get("fulfillments", [])
