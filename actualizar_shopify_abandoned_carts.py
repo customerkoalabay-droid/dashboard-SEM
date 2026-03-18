@@ -39,8 +39,7 @@ SHOPIFY_KEY    = os.environ.get("SHOPIFY_API_KEY")
 SHOPIFY_SECRET = os.environ.get("SHOPIFY_API_SECRET")
 
 # Obtén tu clave gratuita en https://www.exchangerate-api.com/
-EXCHANGERATE_API_KEY = os.environ.get("EXCHANGERATE_API_KEY", "")
-
+EXCHANGERATE_API_KEY = "50549fa88506253883736e0f"
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
