@@ -35,7 +35,7 @@ AD_ACCOUNT_ID     = "act_122669098066867"
 SHEET_ID          = "1evv-YemzQfKFUr4mZyLEqne2ALqPD6v8rzFUlp68fcE"
 
 # Días hacia atrás a descargar
-DIAS_ATRAS = 450
+DIAS_ATRAS = 15
 
 # Tamaño del chunk en días
 CHUNK_DAYS = 15
