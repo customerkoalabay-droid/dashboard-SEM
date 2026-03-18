@@ -3,7 +3,7 @@ actualizar_shopify.py
 ---------------------
 Lee los pedidos de Shopify via API y los vuelca al dashboard.
 Trae el JSON completo (sin filtro de fields) para maximizar datos disponibles.
-Convierte importes a EUR via exchangerate-api.com.
+Shopify ya devuelve todos los importes en EUR — no se necesita conversión.
 
 Hoja destino:
   - SHEET_ID definido abajo → pestaña: shopify_orders
@@ -38,9 +38,6 @@ SHOPIFY_STORE  = os.environ.get("SHOPIFY_STORE", "koalabay")
 SHOPIFY_KEY    = os.environ.get("SHOPIFY_API_KEY")
 SHOPIFY_SECRET = os.environ.get("SHOPIFY_API_SECRET")
 
-# Clave de exchangerate-api.com (plan gratuito en https://www.exchangerate-api.com/)
-EXCHANGERATE_API_KEY = os.environ.get("EXCHANGERATE_API_KEY", "")
-
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
@@ -50,38 +47,6 @@ SCOPES = [
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
-
-
-# ── Tipos de cambio ──────────────────────────────────────────
-
-def obtener_tipos_cambio():
-    if not EXCHANGERATE_API_KEY:
-        log("⚠️  EXCHANGERATE_API_KEY no configurada — importes NO se convertirán a EUR.")
-        return {}
-    try:
-        url  = f"https://v6.exchangerate-api.com/v6/{EXCHANGERATE_API_KEY}/latest/EUR"
-        resp = requests.get(url, timeout=15)
-        resp.raise_for_status()
-        data = resp.json()
-        if data.get("result") != "success":
-            log(f"⚠️  exchangerate-api error: {data.get('error-type', 'desconocido')}")
-            return {}
-        tasas = data["conversion_rates"]
-        log(f"✅ Tipos de cambio obtenidos ({len(tasas)} monedas, base EUR, "
-            f"actualizado: {data.get('time_last_update_utc', '?')})")
-        return tasas
-    except Exception as e:
-        log(f"⚠️  No se pudieron obtener tipos de cambio: {e}")
-        return {}
-
-
-def convertir_a_eur(importe, moneda, tasas):
-    if not moneda or moneda.upper() == "EUR" or not tasas:
-        return importe, False
-    tasa = tasas.get(moneda.upper())
-    if tasa and tasa > 0:
-        return round(importe / tasa, 4), True
-    return importe, False
 
 
 # ── Autenticación ────────────────────────────────────────────
@@ -180,7 +145,18 @@ def obtener_pedidos(fecha_inicio, fecha_fin, token):
     return todos
 
 
-# ── Helpers de parseo ────────────────────────────────────────
+# ── Helpers ──────────────────────────────────────────────────
+
+def safe_float(val):
+    try:
+        return float(val or 0)
+    except (ValueError, TypeError):
+        return 0.0
+
+
+def safe_str(val):
+    return str(val).strip() if val is not None else ""
+
 
 def extraer_utm(landing_site):
     if not landing_site:
@@ -213,29 +189,17 @@ def extraer_mercado(idioma, pais):
         if prefijo == "EU": return "Europa"
     if pais:
         p = pais.upper()
-        if p in ["ES", "SPAIN", "ESPAÑA"]:    return "España"
-        if p in ["DE", "GERMANY", "ALEMANIA"]: return "Alemania"
-        if p in ["FR", "FRANCE", "FRANCIA"]:   return "Francia"
+        if p in ["ES", "SPAIN", "ESPAÑA"]:     return "España"
+        if p in ["DE", "GERMANY", "ALEMANIA"]:  return "Alemania"
+        if p in ["FR", "FRANCE", "FRANCIA"]:    return "Francia"
     return "Otro"
-
-
-def safe_float(val):
-    try:
-        return float(val or 0)
-    except (ValueError, TypeError):
-        return 0.0
-
-
-def safe_str(val):
-    return str(val).strip() if val is not None else ""
 
 
 # ── Parseo de pedidos ────────────────────────────────────────
 
-def parsear_pedido(pedido, tasas):
+def parsear_pedido(pedido):
     # ── Direcciones ──────────────────────────────────────────
     shipping    = pedido.get("shipping_address") or pedido.get("billing_address") or {}
-    billing     = pedido.get("billing_address") or {}
     pais_codigo = shipping.get("country_code", "")
     pais_nombre = shipping.get("country", "")
     ciudad      = shipping.get("city", "")
@@ -248,32 +212,29 @@ def parsear_pedido(pedido, tasas):
     mercado      = extraer_mercado(idioma, pais_codigo or pais_nombre)
 
     # ── Cliente ──────────────────────────────────────────────
-    cliente          = pedido.get("customer") or {}
-    cliente_id       = cliente.get("id", "")
-    cliente_email    = cliente.get("email", "") or pedido.get("email", "")
-    cliente_nombre   = f"{cliente.get('first_name','')} {cliente.get('last_name','')}".strip()
-    cliente_pedidos  = cliente.get("orders_count", 0)          # nº pedidos históricos
-    cliente_gasto    = safe_float(cliente.get("total_spent"))   # gasto histórico total
-    cliente_tags     = cliente.get("tags", "")
-    cliente_nuevo    = "Sí" if cliente_pedidos == 1 else "No"  # primer pedido
+    cliente         = pedido.get("customer") or {}
+    cliente_id      = cliente.get("id", "")
+    cliente_email   = cliente.get("email", "") or pedido.get("email", "")
+    cliente_nombre  = f"{cliente.get('first_name','')} {cliente.get('last_name','')}".strip()
+    cliente_pedidos = cliente.get("orders_count", 0)
+    cliente_gasto   = safe_float(cliente.get("total_spent"))
+    cliente_tags    = cliente.get("tags", "")
+    cliente_nuevo   = "Sí" if cliente_pedidos == 1 else "No"
 
-    # ── Importes ─────────────────────────────────────────────
-    moneda             = safe_str(pedido.get("currency", "EUR"))
-    total_orig         = safe_float(pedido.get("total_price"))
-    subtotal_orig      = safe_float(pedido.get("subtotal_price"))
-    descuentos_orig    = safe_float(pedido.get("total_discounts"))
-    total_impuestos    = safe_float(pedido.get("total_tax"))
-    total_envio        = safe_float(
+    # ── Importes (ya en EUR) ──────────────────────────────────
+    moneda            = safe_str(pedido.get("currency", "EUR"))
+    importe_total     = safe_float(pedido.get("total_price"))
+    subtotal          = safe_float(pedido.get("subtotal_price"))
+    descuentos        = safe_float(pedido.get("total_discounts"))
+    total_impuestos   = safe_float(pedido.get("total_tax"))
+    total_envio       = safe_float(
         sum(safe_float(s.get("price")) for s in pedido.get("shipping_lines", []))
     )
-    total_reembolsado  = safe_float(pedido.get("total_refunds") or
-                         sum(safe_float(r.get("transactions", [{}])[0].get("amount", 0))
-                             for r in pedido.get("refunds", []) if r.get("transactions")))
-
-    total_eur,      convertido = convertir_a_eur(total_orig,      moneda, tasas)
-    subtotal_eur,   _          = convertir_a_eur(subtotal_orig,   moneda, tasas)
-    descuentos_eur, _          = convertir_a_eur(descuentos_orig, moneda, tasas)
-    envio_eur,      _          = convertir_a_eur(total_envio,     moneda, tasas)
+    total_reembolsado = safe_float(
+        pedido.get("total_refunds") or
+        sum(safe_float(r.get("transactions", [{}])[0].get("amount", 0))
+            for r in pedido.get("refunds", []) if r.get("transactions"))
+    )
 
     # ── Descuentos ───────────────────────────────────────────
     discount_codes = pedido.get("discount_codes", [])
@@ -281,134 +242,126 @@ def parsear_pedido(pedido, tasas):
     tipo_dcto      = ", ".join([safe_str(d.get("type")) for d in discount_codes if d.get("type")])
 
     # ── Productos ────────────────────────────────────────────
-    line_items   = pedido.get("line_items", [])
-    num_items    = sum(li.get("quantity", 1) for li in line_items)
-    productos    = " | ".join([
+    line_items  = pedido.get("line_items", [])
+    num_items   = sum(li.get("quantity", 1) for li in line_items)
+    productos   = " | ".join([
         f"{safe_str(li.get('name')) or '?'} x{li.get('quantity', 1)}"
         for li in line_items
     ])
-    skus         = " | ".join([
+    skus        = " | ".join([
         safe_str(li.get("sku")) for li in line_items if li.get("sku")
     ])
-    product_ids  = " | ".join([
+    product_ids = " | ".join([
         str(li.get("product_id", "")) for li in line_items if li.get("product_id")
     ])
-    vendors      = " | ".join(list(dict.fromkeys([
+    vendors     = " | ".join(list(dict.fromkeys([
         safe_str(li.get("vendor")) for li in line_items if li.get("vendor")
     ])))
 
     # ── Envío ────────────────────────────────────────────────
-    shipping_lines  = pedido.get("shipping_lines", [])
-    metodo_envio    = " | ".join([safe_str(s.get("title"))  for s in shipping_lines])
-    carrier_envio   = " | ".join([safe_str(s.get("source")) for s in shipping_lines])
+    shipping_lines = pedido.get("shipping_lines", [])
+    metodo_envio   = " | ".join([safe_str(s.get("title"))  for s in shipping_lines])
+    carrier_envio  = " | ".join([safe_str(s.get("source")) for s in shipping_lines])
 
     # ── Fulfillments ─────────────────────────────────────────
-    fulfillments      = pedido.get("fulfillments", [])
-    tracking_numbers  = " | ".join([
+    fulfillments     = pedido.get("fulfillments", [])
+    tracking_numbers = " | ".join([
         safe_str(f.get("tracking_number")) for f in fulfillments if f.get("tracking_number")
     ])
-    tracking_urls     = " | ".join([
+    tracking_urls    = " | ".join([
         safe_str(f.get("tracking_url")) for f in fulfillments if f.get("tracking_url")
     ])
-    fecha_envio       = fulfillments[0].get("created_at", "")[:10] if fulfillments else ""
+    fecha_envio      = fulfillments[0].get("created_at", "")[:10] if fulfillments else ""
 
     # ── Reembolsos ───────────────────────────────────────────
-    refunds        = pedido.get("refunds", [])
+    refunds         = pedido.get("refunds", [])
     tiene_reembolso = "Sí" if refunds else "No"
     fecha_reembolso = refunds[0].get("created_at", "")[:10] if refunds else ""
 
     # ── Notas ────────────────────────────────────────────────
-    nota = safe_str(pedido.get("note"))
-    note_attributes = "; ".join([
+    nota             = safe_str(pedido.get("note"))
+    note_attributes  = "; ".join([
         f"{na.get('name')}={na.get('value')}"
         for na in pedido.get("note_attributes", [])
         if na.get("name")
     ])
-
-    # ── Impuestos incluidos / exentos ────────────────────────
     impuestos_incluidos = "Sí" if pedido.get("taxes_included") else "No"
 
     return {
         # Identificación
-        "fecha":                 pedido.get("created_at", "")[:10],
-        "fecha_hora":            pedido.get("created_at", ""),
-        "pedido_id":             str(pedido.get("id", "")),
-        "order_number":          pedido.get("order_number", ""),
-        "order_status_url":      pedido.get("order_status_url", ""),
-        "name":                  pedido.get("name", ""),          # "#1001"
+        "fecha":                pedido.get("created_at", "")[:10],
+        "fecha_hora":           pedido.get("created_at", ""),
+        "pedido_id":            str(pedido.get("id", "")),
+        "order_number":         pedido.get("order_number", ""),
+        "order_status_url":     pedido.get("order_status_url", ""),
+        "name":                 pedido.get("name", ""),
         # Estado
-        "estado_pago":           pedido.get("financial_status", ""),
-        "estado_envio":          pedido.get("fulfillment_status", "") or "unfulfilled",
-        "cancelado":             "Sí" if pedido.get("cancelled_at") else "No",
-        "fecha_cancelacion":     (pedido.get("cancelled_at") or "")[:10],
-        "motivo_cancelacion":    pedido.get("cancel_reason", "") or "",
-        "cerrado_en":            (pedido.get("closed_at") or "")[:10],
-        # Importes originales
-        "moneda":                moneda,
-        "importe_total_orig":    total_orig,
-        "subtotal_orig":         subtotal_orig,
-        "descuentos_orig":       descuentos_orig,
-        "total_impuestos":       total_impuestos,
-        "total_envio_orig":      total_envio,
-        "total_reembolsado":     total_reembolsado,
-        # Importes en EUR
-        "importe_total_eur":     total_eur,
-        "subtotal_eur":          subtotal_eur,
-        "descuentos_eur":        descuentos_eur,
-        "total_envio_eur":       envio_eur,
-        "convertido_a_eur":      "Sí" if convertido else "No (ya EUR o sin tasa)",
-        "impuestos_incluidos":   impuestos_incluidos,
+        "estado_pago":          pedido.get("financial_status", ""),
+        "estado_envio":         pedido.get("fulfillment_status", "") or "unfulfilled",
+        "cancelado":            "Sí" if pedido.get("cancelled_at") else "No",
+        "fecha_cancelacion":    (pedido.get("cancelled_at") or "")[:10],
+        "motivo_cancelacion":   pedido.get("cancel_reason", "") or "",
+        "cerrado_en":           (pedido.get("closed_at") or "")[:10],
+        # Importes (en EUR)
+        "moneda":               moneda,
+        "importe_total":        importe_total,
+        "subtotal":             subtotal,
+        "descuentos":           descuentos,
+        "total_impuestos":      total_impuestos,
+        "total_envio":          total_envio,
+        "total_reembolsado":    total_reembolsado,
+        "impuestos_incluidos":  impuestos_incluidos,
         # Descuentos
-        "codigos_descuento":     codigos_dcto,
-        "tipo_descuento":        tipo_dcto,
+        "codigos_descuento":    codigos_dcto,
+        "tipo_descuento":       tipo_dcto,
         # Cliente
-        "cliente_id":            str(cliente_id),
-        "cliente_email":         cliente_email,
-        "cliente_nombre":        cliente_nombre,
-        "cliente_nuevo":         cliente_nuevo,
-        "cliente_num_pedidos":   cliente_pedidos,
-        "cliente_gasto_total":   cliente_gasto,
-        "cliente_tags":          cliente_tags,
+        "cliente_id":           str(cliente_id),
+        "cliente_email":        cliente_email,
+        "cliente_nombre":       cliente_nombre,
+        "cliente_nuevo":        cliente_nuevo,
+        "cliente_num_pedidos":  cliente_pedidos,
+        "cliente_gasto_total":  cliente_gasto,
+        "cliente_tags":         cliente_tags,
         # Geo
-        "pais":                  pais_nombre,
-        "pais_codigo":           pais_codigo,
-        "provincia":             provincia,
-        "ciudad":                ciudad,
-        "zip":                   zip_code,
-        "idioma":                idioma or "",
-        "mercado":               mercado,
+        "pais":                 pais_nombre,
+        "pais_codigo":          pais_codigo,
+        "provincia":            provincia,
+        "ciudad":               ciudad,
+        "zip":                  zip_code,
+        "idioma":               idioma or "",
+        "mercado":              mercado,
         # Tráfico / UTM
-        "utm_source":            utms.get("utm_source")   or pedido.get("source_name", "") or "",
-        "utm_medium":            utms.get("utm_medium")   or "",
-        "utm_campaign":          utms.get("utm_campaign") or "",
-        "utm_content":           utms.get("utm_content")  or "",
-        "utm_term":              utms.get("utm_term")     or "",
-        "referring_site":        pedido.get("referring_site", "") or "",
-        "landing_site":          landing or "",
-        "source_name":           pedido.get("source_name", "") or "",
+        "utm_source":           utms.get("utm_source")   or pedido.get("source_name", "") or "",
+        "utm_medium":           utms.get("utm_medium")   or "",
+        "utm_campaign":         utms.get("utm_campaign") or "",
+        "utm_content":          utms.get("utm_content")  or "",
+        "utm_term":             utms.get("utm_term")     or "",
+        "referring_site":       pedido.get("referring_site", "") or "",
+        "landing_site":         landing or "",
+        "source_name":          pedido.get("source_name", "") or "",
         # Productos
-        "num_productos":         num_items,
-        "productos":             productos,
-        "skus":                  skus,
-        "product_ids":           product_ids,
-        "vendors":               vendors,
+        "num_productos":        num_items,
+        "productos":            productos,
+        "skus":                 skus,
+        "product_ids":          product_ids,
+        "vendors":              vendors,
         # Envío
-        "metodo_envio":          metodo_envio,
-        "carrier_envio":         carrier_envio,
-        "fecha_envio":           fecha_envio,
-        "tracking_number":       tracking_numbers,
-        "tracking_url":          tracking_urls,
+        "metodo_envio":         metodo_envio,
+        "carrier_envio":        carrier_envio,
+        "fecha_envio":          fecha_envio,
+        "tracking_number":      tracking_numbers,
+        "tracking_url":         tracking_urls,
         # Reembolsos
-        "tiene_reembolso":       tiene_reembolso,
-        "fecha_reembolso":       fecha_reembolso,
+        "tiene_reembolso":      tiene_reembolso,
+        "fecha_reembolso":      fecha_reembolso,
         # Notas
-        "nota":                  nota,
-        "note_attributes":       note_attributes,
-        "tags":                  pedido.get("tags", "") or "",
+        "nota":                 nota,
+        "note_attributes":      note_attributes,
+        "tags":                 pedido.get("tags", "") or "",
         # Otros
-        "gateway":               pedido.get("gateway", "") or "",
-        "procesado_en":          (pedido.get("processed_at") or "")[:10],
-        "test":                  "Sí" if pedido.get("test") else "No",
+        "gateway":              pedido.get("gateway", "") or "",
+        "procesado_en":         (pedido.get("processed_at") or "")[:10],
+        "test":                 "Sí" if pedido.get("test") else "No",
     }
 
 
@@ -443,7 +396,6 @@ def upsert_sheet(sheet, df, nombre_pestana, claves):
             filas_exist = [f for f in filas_exist if any(v.strip() != "" for v in f)]
             df_exist    = pd.DataFrame(filas_exist, columns=h_limpios)
 
-            # Normalizar claves a string en ambos df
             for c in claves_validas:
                 if c in df_exist.columns:
                     df_exist[c] = df_exist[c].astype(str).str.strip()
@@ -509,29 +461,25 @@ def main():
     log("🚀 Iniciando sincronización Shopify → Dashboard")
     log("─" * 50)
 
-    # 1. Tipos de cambio
-    log("💱 Obteniendo tipos de cambio...")
-    tasas = obtener_tipos_cambio()
-
-    # 2. Rango de fechas
+    # Rango de fechas
     fecha_fin    = datetime.utcnow()
     fecha_inicio = fecha_fin - timedelta(days=DIAS_ATRAS)
     log(f"📅 Rango: {fecha_inicio.strftime('%Y-%m-%d')} → {fecha_fin.strftime('%Y-%m-%d')}")
     log("─" * 50)
 
-    # 3. Conectar Sheets
+    # Conectar Sheets
     log("🔑 Conectando a Google Sheets...")
     gc    = conectar_sheets()
     sheet = gc.open_by_key(SHEET_ID)
     log("✅ Conectado")
     log("─" * 50)
 
-    # 4. Token Shopify
+    # Token Shopify
     log("🔑 Autenticando con Shopify...")
     token = obtener_access_token()
     log("─" * 50)
 
-    # 5. Obtener pedidos
+    # Obtener pedidos
     log("📥 Obteniendo pedidos de Shopify...")
     pedidos = obtener_pedidos(
         fecha_inicio.strftime("%Y-%m-%dT00:00:00Z"),
@@ -544,19 +492,13 @@ def main():
         log("⚠️  No hay pedidos en el rango. Finalizando.")
         return
 
-    # DEBUG: estructura del primer pedido
-    log(f"🔍 DEBUG campos disponibles: {list(pedidos[0].keys())}")
-
-    # 6. Parsear
-    filas = [parsear_pedido(p, tasas) for p in pedidos]
+    # Parsear
+    filas = [parsear_pedido(p) for p in pedidos]
     df    = pd.DataFrame(filas)
     log(f"   {len(df)} filas procesadas")
-
-    monedas = df["moneda"].value_counts().to_dict()
-    log(f"💱 Monedas encontradas: {monedas}")
     log("─" * 50)
 
-    # 7. Volcar al dashboard
+    # Volcar al dashboard
     upsert_sheet(sheet, df, PESTANA, claves=["pedido_id"])
 
     log("─" * 50)
