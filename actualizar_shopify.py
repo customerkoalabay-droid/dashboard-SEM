@@ -2,6 +2,8 @@
 actualizar_shopify.py
 ---------------------
 Lee los pedidos de Shopify via API y los vuelca al dashboard.
+Trae el JSON completo (sin filtro de fields) para maximizar datos disponibles.
+Convierte importes a EUR via exchangerate-api.com.
 
 Hoja destino:
   - SHEET_ID definido abajo → pestaña: shopify_orders
@@ -28,13 +30,16 @@ from google.oauth2.service_account import Credentials
 # ============================================================
 # CONFIGURACIÓN
 # ============================================================
-SHEET_ID      = "1j84VyucNRrRx7haLKm16ppRuaL28p5BaX75D4BHaqWs"  # Dashboard Shopify
-PESTANA       = "shopify_orders"
-DIAS_ATRAS    = 440  # carga histórica desde enero 2025
+SHEET_ID   = "1j84VyucNRrRx7haLKm16ppRuaL28p5BaX75D4BHaqWs"
+PESTANA    = "shopify_orders"
+DIAS_ATRAS = 440
 
 SHOPIFY_STORE  = os.environ.get("SHOPIFY_STORE", "koalabay")
 SHOPIFY_KEY    = os.environ.get("SHOPIFY_API_KEY")
 SHOPIFY_SECRET = os.environ.get("SHOPIFY_API_SECRET")
+
+# Clave de exchangerate-api.com (plan gratuito en https://www.exchangerate-api.com/)
+EXCHANGERATE_API_KEY = os.environ.get("EXCHANGERATE_API_KEY", "")
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
@@ -47,7 +52,39 @@ def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
 
-# ── Autenticación Google Sheets ──────────────────────────────
+# ── Tipos de cambio ──────────────────────────────────────────
+
+def obtener_tipos_cambio():
+    if not EXCHANGERATE_API_KEY:
+        log("⚠️  EXCHANGERATE_API_KEY no configurada — importes NO se convertirán a EUR.")
+        return {}
+    try:
+        url  = f"https://v6.exchangerate-api.com/v6/{EXCHANGERATE_API_KEY}/latest/EUR"
+        resp = requests.get(url, timeout=15)
+        resp.raise_for_status()
+        data = resp.json()
+        if data.get("result") != "success":
+            log(f"⚠️  exchangerate-api error: {data.get('error-type', 'desconocido')}")
+            return {}
+        tasas = data["conversion_rates"]
+        log(f"✅ Tipos de cambio obtenidos ({len(tasas)} monedas, base EUR, "
+            f"actualizado: {data.get('time_last_update_utc', '?')})")
+        return tasas
+    except Exception as e:
+        log(f"⚠️  No se pudieron obtener tipos de cambio: {e}")
+        return {}
+
+
+def convertir_a_eur(importe, moneda, tasas):
+    if not moneda or moneda.upper() == "EUR" or not tasas:
+        return importe, False
+    tasa = tasas.get(moneda.upper())
+    if tasa and tasa > 0:
+        return round(importe / tasa, 4), True
+    return importe, False
+
+
+# ── Autenticación ────────────────────────────────────────────
 
 def conectar_sheets():
     sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT")
@@ -60,11 +97,8 @@ def conectar_sheets():
     return gspread.authorize(creds)
 
 
-# ── Shopify API ──────────────────────────────────────────────
-
 def obtener_access_token():
-    """Obtiene un access token de Shopify via OAuth client credentials."""
-    url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/oauth/access_token"
+    url  = f"https://{SHOPIFY_STORE}.myshopify.com/admin/oauth/access_token"
     resp = requests.post(url, data={
         "grant_type":    "client_credentials",
         "client_id":     SHOPIFY_KEY,
@@ -72,58 +106,47 @@ def obtener_access_token():
     }, timeout=30)
     resp.raise_for_status()
     token = resp.json().get("access_token")
-    log(f"✅ Token Shopify obtenido")
+    log("✅ Token Shopify obtenido")
     return token
 
 
 def shopify_get(endpoint, params=None, token=None):
-    """Hace una petición GET a la API de Shopify con access token."""
     url = f"https://{SHOPIFY_STORE}.myshopify.com/admin/api/2024-01/{endpoint}"
-    response = requests.get(
+    resp = requests.get(
         url,
         headers={"X-Shopify-Access-Token": token},
         params=params or {},
         timeout=30,
     )
-    response.raise_for_status()
-    return response
+    resp.raise_for_status()
+    return resp
 
+
+# ── Obtención de pedidos ─────────────────────────────────────
 
 def obtener_pedidos(fecha_inicio, fecha_fin, token):
-    """Obtiene todos los pedidos en el rango de fechas dado, iterando por meses."""
-    todos_pedidos = []
-
-    # Convertir a datetime para iterar por meses
+    todos = []
     dt_inicio = datetime.strptime(fecha_inicio[:10], "%Y-%m-%d")
-    dt_fin    = datetime.strptime(fecha_fin[:10], "%Y-%m-%d")
+    dt_fin    = datetime.strptime(fecha_fin[:10],    "%Y-%m-%d")
 
-    # Iterar mes a mes para evitar límites de Shopify en rangos largos
     cursor = dt_inicio
     while cursor <= dt_fin:
-        mes_fin = min(
-            datetime(cursor.year, cursor.month + 1 if cursor.month < 12 else 1,
-                     1, tzinfo=None) - timedelta(days=1)
-            if cursor.month < 12
-            else datetime(cursor.year + 1, 1, 1) - timedelta(days=1),
-            dt_fin
-        )
+        if cursor.month < 12:
+            mes_fin = datetime(cursor.year, cursor.month + 1, 1) - timedelta(days=1)
+        else:
+            mes_fin = datetime(cursor.year + 1, 1, 1) - timedelta(days=1)
+        mes_fin = min(mes_fin, dt_fin)
 
         rango_inicio = cursor.strftime("%Y-%m-%dT00:00:00Z")
         rango_fin    = mes_fin.strftime("%Y-%m-%dT23:59:59Z")
         log(f"   📅 Mes: {rango_inicio[:7]}...")
 
+        # Sin 'fields' → JSON completo en todas las páginas
         params = {
             "status":         "any",
             "created_at_min": rango_inicio,
             "created_at_max": rango_fin,
             "limit":          250,
-            "fields": (
-                "id,created_at,financial_status,fulfillment_status,"
-                "total_price,subtotal_price,total_discounts,currency,"
-                "billing_address,shipping_address,"
-                "landing_site,referring_site,source_name,"
-                "line_items,tags"
-            ),
         }
 
         page = 1
@@ -131,7 +154,7 @@ def obtener_pedidos(fecha_inicio, fecha_fin, token):
             log(f"      Página {page}...")
             resp = shopify_get("orders.json", params, token=token)
             data = resp.json().get("orders", [])
-            todos_pedidos.extend(data)
+            todos.extend(data)
 
             link_header = resp.headers.get("Link", "")
             if 'rel="next"' not in link_header:
@@ -140,28 +163,32 @@ def obtener_pedidos(fecha_inicio, fecha_fin, token):
             match = re.search(r'<[^>]*page_info=([^&>]+)[^>]*>;\s*rel="next"', link_header)
             if not match:
                 break
-            params = {"limit": 250, "page_info": match.group(1)}
+            # Sin 'fields' → JSON completo también en páginas siguientes
+            params = {
+                "limit":     250,
+                "page_info": match.group(1),
+            }
             page += 1
             time.sleep(0.5)
 
-        # Avanzar al mes siguiente
         if cursor.month == 12:
             cursor = datetime(cursor.year + 1, 1, 1)
         else:
             cursor = datetime(cursor.year, cursor.month + 1, 1)
         time.sleep(1)
 
-    return todos_pedidos
+    return todos
 
 
-# ── Parseo de pedidos ────────────────────────────────────────
+# ── Helpers de parseo ────────────────────────────────────────
 
 def extraer_utm(landing_site):
-    """Extrae UTM params de la landing_site URL."""
     if not landing_site:
         return {}, None
     try:
-        parsed = urlparse(landing_site if landing_site.startswith("http") else f"https://x.com{landing_site}")
+        parsed = urlparse(
+            landing_site if landing_site.startswith("http") else f"https://x.com{landing_site}"
+        )
         qs = parse_qs(parsed.query)
         utms = {
             "utm_source":   qs.get("utm_source",   [None])[0],
@@ -170,7 +197,6 @@ def extraer_utm(landing_site):
             "utm_content":  qs.get("utm_content",  [None])[0],
             "utm_term":     qs.get("utm_term",     [None])[0],
         }
-        # Extraer mercado/idioma de la subcarpeta (/de-de/, /es-es/, etc.)
         match = re.search(r"/([a-z]{2}-[a-z]{2})/", parsed.path)
         idioma = match.group(1) if match else None
         return utms, idioma
@@ -179,7 +205,6 @@ def extraer_utm(landing_site):
 
 
 def extraer_mercado(idioma, pais):
-    """Infiere el mercado a partir del idioma o país."""
     if idioma:
         prefijo = idioma.split("-")[1].upper() if "-" in idioma else idioma.upper()
         if prefijo == "ES": return "España"
@@ -188,52 +213,202 @@ def extraer_mercado(idioma, pais):
         if prefijo == "EU": return "Europa"
     if pais:
         p = pais.upper()
-        if p in ["ES", "SPAIN", "ESPAÑA"]:           return "España"
-        if p in ["DE", "GERMANY", "ALEMANIA"]:        return "Alemania"
-        if p in ["FR", "FRANCE", "FRANCIA"]:          return "Francia"
+        if p in ["ES", "SPAIN", "ESPAÑA"]:    return "España"
+        if p in ["DE", "GERMANY", "ALEMANIA"]: return "Alemania"
+        if p in ["FR", "FRANCE", "FRANCIA"]:   return "Francia"
     return "Otro"
 
 
-def parsear_pedido(pedido):
-    """Convierte un pedido de Shopify en una fila para el dashboard."""
-    landing    = pedido.get("landing_site", "")
-    utms, idioma = extraer_utm(landing)
+def safe_float(val):
+    try:
+        return float(val or 0)
+    except (ValueError, TypeError):
+        return 0.0
 
-    shipping = pedido.get("shipping_address") or pedido.get("billing_address") or {}
+
+def safe_str(val):
+    return str(val).strip() if val is not None else ""
+
+
+# ── Parseo de pedidos ────────────────────────────────────────
+
+def parsear_pedido(pedido, tasas):
+    # ── Direcciones ──────────────────────────────────────────
+    shipping    = pedido.get("shipping_address") or pedido.get("billing_address") or {}
+    billing     = pedido.get("billing_address") or {}
     pais_codigo = shipping.get("country_code", "")
     pais_nombre = shipping.get("country", "")
     ciudad      = shipping.get("city", "")
+    provincia   = shipping.get("province", "")
+    zip_code    = shipping.get("zip", "")
 
-    mercado = extraer_mercado(idioma, pais_codigo or pais_nombre)
+    # ── UTM / landing ────────────────────────────────────────
+    landing      = pedido.get("landing_site", "")
+    utms, idioma = extraer_utm(landing)
+    mercado      = extraer_mercado(idioma, pais_codigo or pais_nombre)
 
-    # Productos del pedido (resumen)
-    line_items  = pedido.get("line_items", [])
-    productos   = " | ".join([f"{li.get('name','?')} x{li.get('quantity',1)}" for li in line_items[:3]])
-    num_items   = sum(li.get("quantity", 1) for li in line_items)
+    # ── Cliente ──────────────────────────────────────────────
+    cliente          = pedido.get("customer") or {}
+    cliente_id       = cliente.get("id", "")
+    cliente_email    = cliente.get("email", "") or pedido.get("email", "")
+    cliente_nombre   = f"{cliente.get('first_name','')} {cliente.get('last_name','')}".strip()
+    cliente_pedidos  = cliente.get("orders_count", 0)          # nº pedidos históricos
+    cliente_gasto    = safe_float(cliente.get("total_spent"))   # gasto histórico total
+    cliente_tags     = cliente.get("tags", "")
+    cliente_nuevo    = "Sí" if cliente_pedidos == 1 else "No"  # primer pedido
+
+    # ── Importes ─────────────────────────────────────────────
+    moneda             = safe_str(pedido.get("currency", "EUR"))
+    total_orig         = safe_float(pedido.get("total_price"))
+    subtotal_orig      = safe_float(pedido.get("subtotal_price"))
+    descuentos_orig    = safe_float(pedido.get("total_discounts"))
+    total_impuestos    = safe_float(pedido.get("total_tax"))
+    total_envio        = safe_float(
+        sum(safe_float(s.get("price")) for s in pedido.get("shipping_lines", []))
+    )
+    total_reembolsado  = safe_float(pedido.get("total_refunds") or
+                         sum(safe_float(r.get("transactions", [{}])[0].get("amount", 0))
+                             for r in pedido.get("refunds", []) if r.get("transactions")))
+
+    total_eur,      convertido = convertir_a_eur(total_orig,      moneda, tasas)
+    subtotal_eur,   _          = convertir_a_eur(subtotal_orig,   moneda, tasas)
+    descuentos_eur, _          = convertir_a_eur(descuentos_orig, moneda, tasas)
+    envio_eur,      _          = convertir_a_eur(total_envio,     moneda, tasas)
+
+    # ── Descuentos ───────────────────────────────────────────
+    discount_codes = pedido.get("discount_codes", [])
+    codigos_dcto   = ", ".join([d.get("code", "") for d in discount_codes if d.get("code")])
+    tipo_dcto      = ", ".join([d.get("type", "") for d in discount_codes if d.get("type")])
+
+    # ── Productos ────────────────────────────────────────────
+    line_items   = pedido.get("line_items", [])
+    num_items    = sum(li.get("quantity", 1) for li in line_items)
+    productos    = " | ".join([
+        f"{li.get('name', '?')} x{li.get('quantity', 1)}"
+        for li in line_items
+    ])
+    skus         = " | ".join([
+        safe_str(li.get("sku")) for li in line_items if li.get("sku")
+    ])
+    product_ids  = " | ".join([
+        str(li.get("product_id", "")) for li in line_items if li.get("product_id")
+    ])
+    vendors      = " | ".join(list(dict.fromkeys([
+        safe_str(li.get("vendor")) for li in line_items if li.get("vendor")
+    ])))
+
+    # ── Envío ────────────────────────────────────────────────
+    shipping_lines  = pedido.get("shipping_lines", [])
+    metodo_envio    = " | ".join([s.get("title", "") for s in shipping_lines])
+    carrier_envio   = " | ".join([s.get("source", "") for s in shipping_lines])
+
+    # ── Fulfillments ─────────────────────────────────────────
+    fulfillments      = pedido.get("fulfillments", [])
+    tracking_numbers  = " | ".join([
+        safe_str(f.get("tracking_number")) for f in fulfillments if f.get("tracking_number")
+    ])
+    tracking_urls     = " | ".join([
+        safe_str(f.get("tracking_url")) for f in fulfillments if f.get("tracking_url")
+    ])
+    fecha_envio       = fulfillments[0].get("created_at", "")[:10] if fulfillments else ""
+
+    # ── Reembolsos ───────────────────────────────────────────
+    refunds        = pedido.get("refunds", [])
+    tiene_reembolso = "Sí" if refunds else "No"
+    fecha_reembolso = refunds[0].get("created_at", "")[:10] if refunds else ""
+
+    # ── Notas ────────────────────────────────────────────────
+    nota = safe_str(pedido.get("note"))
+    note_attributes = "; ".join([
+        f"{na.get('name')}={na.get('value')}"
+        for na in pedido.get("note_attributes", [])
+        if na.get("name")
+    ])
+
+    # ── Impuestos incluidos / exentos ────────────────────────
+    impuestos_incluidos = "Sí" if pedido.get("taxes_included") else "No"
 
     return {
-        "fecha":              pedido.get("created_at", "")[:10],
-        "pedido_id":          pedido.get("id"),
-        "estado_pago":        pedido.get("financial_status", ""),
-        "estado_envio":       pedido.get("fulfillment_status", "") or "unfulfilled",
-        "importe_total":      float(pedido.get("total_price", 0) or 0),
-        "subtotal":           float(pedido.get("subtotal_price", 0) or 0),
-        "descuentos":         float(pedido.get("total_discounts", 0) or 0),
-        "moneda":             pedido.get("currency", ""),
-        "pais":               pais_nombre,
-        "pais_codigo":        pais_codigo,
-        "ciudad":             ciudad,
-        "idioma":             idioma or "",
-        "mercado":            mercado,
-        "utm_source":         utms.get("utm_source") or pedido.get("source_name", "") or "",
-        "utm_medium":         utms.get("utm_medium") or "",
-        "utm_campaign":       utms.get("utm_campaign") or "",
-        "utm_content":        utms.get("utm_content") or "",
-        "utm_term":           utms.get("utm_term") or "",
-        "referring_site":     pedido.get("referring_site", "") or "",
-        "num_productos":      num_items,
-        "productos":          productos,
-        "tags":               pedido.get("tags", "") or "",
+        # Identificación
+        "fecha":                 pedido.get("created_at", "")[:10],
+        "fecha_hora":            pedido.get("created_at", ""),
+        "pedido_id":             str(pedido.get("id", "")),
+        "order_number":          pedido.get("order_number", ""),
+        "order_status_url":      pedido.get("order_status_url", ""),
+        "name":                  pedido.get("name", ""),          # "#1001"
+        # Estado
+        "estado_pago":           pedido.get("financial_status", ""),
+        "estado_envio":          pedido.get("fulfillment_status", "") or "unfulfilled",
+        "cancelado":             "Sí" if pedido.get("cancelled_at") else "No",
+        "fecha_cancelacion":     (pedido.get("cancelled_at") or "")[:10],
+        "motivo_cancelacion":    pedido.get("cancel_reason", "") or "",
+        "cerrado_en":            (pedido.get("closed_at") or "")[:10],
+        # Importes originales
+        "moneda":                moneda,
+        "importe_total_orig":    total_orig,
+        "subtotal_orig":         subtotal_orig,
+        "descuentos_orig":       descuentos_orig,
+        "total_impuestos":       total_impuestos,
+        "total_envio_orig":      total_envio,
+        "total_reembolsado":     total_reembolsado,
+        # Importes en EUR
+        "importe_total_eur":     total_eur,
+        "subtotal_eur":          subtotal_eur,
+        "descuentos_eur":        descuentos_eur,
+        "total_envio_eur":       envio_eur,
+        "convertido_a_eur":      "Sí" if convertido else "No (ya EUR o sin tasa)",
+        "impuestos_incluidos":   impuestos_incluidos,
+        # Descuentos
+        "codigos_descuento":     codigos_dcto,
+        "tipo_descuento":        tipo_dcto,
+        # Cliente
+        "cliente_id":            str(cliente_id),
+        "cliente_email":         cliente_email,
+        "cliente_nombre":        cliente_nombre,
+        "cliente_nuevo":         cliente_nuevo,
+        "cliente_num_pedidos":   cliente_pedidos,
+        "cliente_gasto_total":   cliente_gasto,
+        "cliente_tags":          cliente_tags,
+        # Geo
+        "pais":                  pais_nombre,
+        "pais_codigo":           pais_codigo,
+        "provincia":             provincia,
+        "ciudad":                ciudad,
+        "zip":                   zip_code,
+        "idioma":                idioma or "",
+        "mercado":               mercado,
+        # Tráfico / UTM
+        "utm_source":            utms.get("utm_source")   or pedido.get("source_name", "") or "",
+        "utm_medium":            utms.get("utm_medium")   or "",
+        "utm_campaign":          utms.get("utm_campaign") or "",
+        "utm_content":           utms.get("utm_content")  or "",
+        "utm_term":              utms.get("utm_term")     or "",
+        "referring_site":        pedido.get("referring_site", "") or "",
+        "landing_site":          landing or "",
+        "source_name":           pedido.get("source_name", "") or "",
+        # Productos
+        "num_productos":         num_items,
+        "productos":             productos,
+        "skus":                  skus,
+        "product_ids":           product_ids,
+        "vendors":               vendors,
+        # Envío
+        "metodo_envio":          metodo_envio,
+        "carrier_envio":         carrier_envio,
+        "fecha_envio":           fecha_envio,
+        "tracking_number":       tracking_numbers,
+        "tracking_url":          tracking_urls,
+        # Reembolsos
+        "tiene_reembolso":       tiene_reembolso,
+        "fecha_reembolso":       fecha_reembolso,
+        # Notas
+        "nota":                  nota,
+        "note_attributes":       note_attributes,
+        "tags":                  pedido.get("tags", "") or "",
+        # Otros
+        "gateway":               pedido.get("gateway", "") or "",
+        "procesado_en":          (pedido.get("processed_at") or "")[:10],
+        "test":                  "Sí" if pedido.get("test") else "No",
     }
 
 
@@ -243,23 +418,37 @@ def upsert_sheet(sheet, df, nombre_pestana, claves):
     log(f"   Columnas en df ({len(df.columns)}): {list(df.columns)}")
     claves_validas = [c for c in claves if c in df.columns]
 
+    if not claves_validas:
+        log(f"  ⚠️  Ninguna clave válida — abortando upsert.")
+        return
+
     for intento in range(3):
         try:
-            ws = sheet.worksheet(nombre_pestana)
+            ws            = sheet.worksheet(nombre_pestana)
             valores_exist = ws.get_all_values()
 
-            if not valores_exist or len(valores_exist) < 2 or not claves_validas:
+            if not valores_exist or len(valores_exist) < 2:
                 ws.clear()
                 _write_in_chunks(ws, [df.columns.tolist()] + df.fillna("").values.tolist())
-                log(f"  ✅ '{nombre_pestana}': {len(df)} filas escritas")
+                log(f"  ✅ '{nombre_pestana}': {len(df)} filas escritas (primera vez)")
                 return
 
             h_exist     = valores_exist[0]
             idx_validos = [i for i, h in enumerate(h_exist) if h.strip() != ""]
             h_limpios   = [h_exist[i] for i in idx_validos]
-            filas_exist = [[fila[i] if i < len(fila) else "" for i in idx_validos] for fila in valores_exist[1:]]
+            filas_exist = [
+                [fila[i] if i < len(fila) else "" for i in idx_validos]
+                for fila in valores_exist[1:]
+            ]
             filas_exist = [f for f in filas_exist if any(v.strip() != "" for v in f)]
             df_exist    = pd.DataFrame(filas_exist, columns=h_limpios)
+
+            # Normalizar claves a string en ambos df
+            for c in claves_validas:
+                if c in df_exist.columns:
+                    df_exist[c] = df_exist[c].astype(str).str.strip()
+                if c in df.columns:
+                    df[c] = df[c].astype(str).str.strip()
 
             claves_merge = [c for c in claves_validas if c in df_exist.columns]
             if not claves_merge:
@@ -268,6 +457,7 @@ def upsert_sheet(sheet, df, nombre_pestana, claves):
                 log(f"  ✅ '{nombre_pestana}': {len(df)} filas escritas (reescritura completa)")
                 return
 
+            n_antes   = len(df_exist)
             df_merged = (
                 pd.concat([df_exist, df], ignore_index=True)
                   .drop_duplicates(subset=claves_merge, keep="last")
@@ -277,9 +467,9 @@ def upsert_sheet(sheet, df, nombre_pestana, claves):
             ws.clear()
             _write_in_chunks(ws, [df_merged.columns.tolist()] + df_merged.fillna("").values.tolist())
 
-            nuevas = len(df_merged) - len(df_exist)
+            nuevas = max(len(df_merged) - n_antes, 0)
             log(f"  ✅ '{nombre_pestana}': {len(df_merged)} filas totales "
-                f"({max(nuevas, 0)} nuevas / {len(df)} procesadas)")
+                f"({nuevas} nuevas / {len(df)} procesadas)")
             return
 
         except Exception as e:
@@ -319,43 +509,55 @@ def main():
     log("🚀 Iniciando sincronización Shopify → Dashboard")
     log("─" * 50)
 
-    # Rango de fechas
-    fecha_fin   = datetime.utcnow()
+    # 1. Tipos de cambio
+    log("💱 Obteniendo tipos de cambio...")
+    tasas = obtener_tipos_cambio()
+
+    # 2. Rango de fechas
+    fecha_fin    = datetime.utcnow()
     fecha_inicio = fecha_fin - timedelta(days=DIAS_ATRAS)
-    fecha_inicio_str = fecha_inicio.strftime("%Y-%m-%dT00:00:00Z")
-    fecha_fin_str    = fecha_fin.strftime("%Y-%m-%dT23:59:59Z")
-    log(f"📅 Rango: {fecha_inicio_str[:10]} → {fecha_fin_str[:10]}")
+    log(f"📅 Rango: {fecha_inicio.strftime('%Y-%m-%d')} → {fecha_fin.strftime('%Y-%m-%d')}")
     log("─" * 50)
 
-    # Conectar Sheets
+    # 3. Conectar Sheets
     log("🔑 Conectando a Google Sheets...")
     gc    = conectar_sheets()
     sheet = gc.open_by_key(SHEET_ID)
     log("✅ Conectado")
     log("─" * 50)
 
-    # Obtener token Shopify
+    # 4. Token Shopify
     log("🔑 Autenticando con Shopify...")
     token = obtener_access_token()
     log("─" * 50)
 
-    # Obtener pedidos
+    # 5. Obtener pedidos
     log("📥 Obteniendo pedidos de Shopify...")
-    pedidos = obtener_pedidos(fecha_inicio_str, fecha_fin_str, token)
+    pedidos = obtener_pedidos(
+        fecha_inicio.strftime("%Y-%m-%dT00:00:00Z"),
+        fecha_fin.strftime("%Y-%m-%dT23:59:59Z"),
+        token,
+    )
     log(f"   {len(pedidos)} pedidos obtenidos")
 
     if not pedidos:
         log("⚠️  No hay pedidos en el rango. Finalizando.")
         return
 
-    # Parsear pedidos
-    filas = [parsear_pedido(p) for p in pedidos]
+    # DEBUG: estructura del primer pedido
+    log(f"🔍 DEBUG campos disponibles: {list(pedidos[0].keys())}")
+
+    # 6. Parsear
+    filas = [parsear_pedido(p, tasas) for p in pedidos]
     df    = pd.DataFrame(filas)
     log(f"   {len(df)} filas procesadas")
+
+    monedas = df["moneda"].value_counts().to_dict()
+    log(f"💱 Monedas encontradas: {monedas}")
     log("─" * 50)
 
-    # Volcar al dashboard
-    upsert_sheet(sheet, df, PESTANA, ["pedido_id"])
+    # 7. Volcar al dashboard
+    upsert_sheet(sheet, df, PESTANA, claves=["pedido_id"])
 
     log("─" * 50)
     log("🎉 Sincronización Shopify completada.")
