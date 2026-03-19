@@ -41,7 +41,7 @@ jobs:
           SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
         run: python actualizar_shopify.py
 
-        name: Actualizar Shopify
+        name: Actualizar Shopify Abandoned Carts
         env:
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
           SHOPIFY_API_KEY: ${{ secrets.SHOPIFY_API_KEY }}
