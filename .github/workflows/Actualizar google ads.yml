@@ -18,7 +18,7 @@ jobs:
           python-version: '3.11'
 
       - name: Instalar dependencias
-        run: pip install gspread google-auth google-api-python-client pandas requests
+        run: pip install gspread google-auth google-api-python-client facebook-business pandas requests
 
       - name: Actualizar Google Ads
         env:
