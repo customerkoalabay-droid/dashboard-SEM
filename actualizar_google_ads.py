@@ -4,10 +4,14 @@ actualizar_google_ads.py
 Lee los informes de Google Ads exportados a Google Sheets,
 los limpia y normaliza, y los vuelca al Sheet principal del dashboard.
 
+Los sheet_id de origen se resuelven dinámicamente buscando por nombre
+en Google Drive, por lo que aunque Google Ads genere un Sheet nuevo
+cada día con distinto ID, el script siempre encontrará el más reciente.
+
 Hojas de origen (Google Ads → Sheets):
-  - Campañas:           sheet_id en FUENTES
-  - Grupos de anuncios: sheet_id en FUENTES
-  - Anuncios:           sheet_id en FUENTES
+  - gads_campaigns:  informe de campañas
+  - gads_adgroups:   informe de grupos de anuncios
+  - gads_ads:        informe de anuncios/demografía
 
 Hoja destino (dashboard principal):
   - SHEET_ID definido abajo → pestañas: Gads_campaigns, Gads_adgroups, Gads_ads
@@ -16,7 +20,7 @@ Uso:
     python actualizar_google_ads.py
 
 Requisitos:
-    pip install gspread google-auth pandas
+    pip install gspread google-auth google-api-python-client pandas
 """
 
 import json
@@ -27,6 +31,7 @@ from datetime import datetime
 import gspread
 import pandas as pd
 from google.oauth2.service_account import Credentials
+from googleapiclient.discovery import build
 
 # ============================================================
 # CONFIGURACIÓN
@@ -35,23 +40,23 @@ SHEET_ID = "1QV-qOoxjdgBNAwxlqYcKyj-EJ_KAEIS8J7TjHsPm0go"  # Dashboard Google Ad
 
 FUENTES = {
     "gads_campaigns": {
-        "sheet_id":  "1-C-nMfK8_eZIAjuSTqTz2fwGNtJS3U8s502EAGvXoII",
-        "pestana":   "Hoja 1",
-        "destino":   "Gads_campaigns",
-        # FIX: hora_del_dia no existe en el informe de campañas → clave correcta
-        "claves":    ["fecha", "campana"],
+        # nombre exacto del Sheet que genera Google Ads en Drive
+        "nombre_drive": "gads_campaigns",
+        "pestana":      "Hoja 1",
+        "destino":      "Gads_campaigns",
+        "claves":       ["fecha", "campana"],
     },
     "gads_adgroups": {
-        "sheet_id":  "1KDV801Y5hYt5DI9UxK2OSq7atCb7s8qiEp9jTOshz1E",
-        "pestana":   "Hoja 1",
-        "destino":   "Gads_adgroups",
-        "claves":    ["fecha", "grupo_de_anuncios", "ciudad_ubicacion_de_usuario"],
+        "nombre_drive": "gads_adgroups",
+        "pestana":      "Hoja 1",
+        "destino":      "Gads_adgroups",
+        "claves":       ["fecha", "grupo_de_anuncios", "ciudad_ubicacion_de_usuario"],
     },
     "gads_ads": {
-        "sheet_id":  "1ZsI9_wdCm6Svt5rjjkTG-xMetQKCaZ7XE1Af-QHKr5A",
-        "pestana":   "Hoja 1",
-        "destino":   "Gads_ads",
-        "claves":    ["fecha", "campana", "grupo_de_anuncios", "sexo", "edad"],
+        "nombre_drive": "gads_ads",
+        "pestana":      "Hoja 1",
+        "destino":      "Gads_ads",
+        "claves":       ["fecha", "campana", "grupo_de_anuncios", "sexo", "edad"],
     },
 }
 
@@ -68,15 +73,47 @@ def log(msg):
 
 # ── Autenticación ────────────────────────────────────────────
 
-def conectar_sheets():
+def obtener_credenciales():
     sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT")
     if sa_json:
         info = json.loads(sa_json)
     else:
         with open("service_account.json", "r") as f:
             info = json.load(f)
-    creds = Credentials.from_service_account_info(info, scopes=SCOPES)
+    return Credentials.from_service_account_info(info, scopes=SCOPES)
+
+
+def conectar_sheets(creds):
     return gspread.authorize(creds)
+
+
+def conectar_drive(creds):
+    return build("drive", "v3", credentials=creds)
+
+
+# ── Búsqueda dinámica de Sheet ID en Drive ───────────────────
+
+def obtener_sheet_id_por_nombre(nombre, drive_service):
+    """
+    Busca en Google Drive el Sheet más reciente cuyo nombre coincida
+    exactamente con `nombre`. Útil cuando Google Ads genera un Sheet
+    nuevo cada día con distinto ID pero el mismo nombre.
+    """
+    resultado = drive_service.files().list(
+        q=f"name='{nombre}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
+        orderBy="createdTime desc",
+        pageSize=1,
+        fields="files(id, name, createdTime)"
+    ).execute()
+
+    archivos = resultado.get("files", [])
+    if not archivos:
+        raise ValueError(f"No se encontró ningún Sheet con nombre '{nombre}' en Drive. "
+                         f"Verifica que la service account tenga acceso al Drive donde se generan los informes.")
+
+    sheet_id = archivos[0]["id"]
+    log(f"   [Drive] '{nombre}' → {sheet_id} (creado: {archivos[0]['createdTime']})")
+    return sheet_id
 
 
 # ── Limpieza y normalización ─────────────────────────────────
@@ -210,7 +247,7 @@ def extraer_tipo(nombre):
 
 def normalizar_tipos_para_merge(df_exist, df_nuevo, claves):
     """
-    FIX: df_exist viene todo como strings desde get_all_values().
+    df_exist viene todo como strings desde get_all_values().
     Convertimos las columnas numéricas de df_exist al mismo tipo que df_nuevo
     para que drop_duplicates funcione correctamente.
     """
@@ -222,7 +259,6 @@ def normalizar_tipos_para_merge(df_exist, df_nuevo, claves):
             except Exception:
                 pass
 
-    # Las claves también deben ser strings en ambos para comparar bien
     for clave in claves:
         if clave in df_exist.columns:
             df_exist[clave] = df_exist[clave].astype(str).str.strip()
@@ -238,8 +274,7 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
     log(f"   Columnas en df ({len(df.columns)}): {list(df.columns)}")
     log(f"   Claves buscadas: {claves}")
 
-    # Verificar qué claves existen realmente en el df
-    claves_validas = [c for c in claves if c in df.columns]
+    claves_validas   = [c for c in claves if c in df.columns]
     claves_faltantes = [c for c in claves if c not in df.columns]
 
     if claves_faltantes:
@@ -253,7 +288,6 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
             ws = sheet.worksheet(nombre_pestaña)
             valores_exist = ws.get_all_values()
 
-            # Hoja vacía o sin datos → escribir directo
             if not valores_exist or len(valores_exist) < 2:
                 ws.clear()
                 data = [df.columns.tolist()] + df.fillna("").values.tolist()
@@ -261,7 +295,6 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
                 log(f"  ✅ '{nombre_pestaña}': {len(df)} filas escritas (primera vez)")
                 return
 
-            # Reconstruir df existente
             h_exist      = valores_exist[0]
             idx_validos  = [i for i, h in enumerate(h_exist) if h.strip() != ""]
             h_limpios    = [h_exist[i] for i in idx_validos]
@@ -272,11 +305,9 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
             filas_exist  = [f for f in filas_exist if any(v.strip() != "" for v in f)]
             df_exist     = pd.DataFrame(filas_exist, columns=h_limpios)
 
-            # Claves que existen en AMBOS dataframes
             claves_merge = [c for c in claves_validas if c in df_exist.columns]
 
             if not claves_merge:
-                # Las claves no coinciden con la hoja destino → reescribir todo
                 log(f"  ⚠️  Claves no coinciden con hoja destino. Reescribiendo todo.")
                 ws.clear()
                 data = [df.columns.tolist()] + df.fillna("").values.tolist()
@@ -284,7 +315,6 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
                 log(f"  ✅ '{nombre_pestaña}': {len(df)} filas escritas (reescritura completa)")
                 return
 
-            # FIX: normalizar tipos antes del merge para que drop_duplicates funcione
             df_exist, df = normalizar_tipos_para_merge(df_exist, df, claves_merge)
 
             n_antes = len(df_exist)
@@ -340,14 +370,34 @@ def main():
     log("🚀 Iniciando sincronización Google Ads → Dashboard")
     log("─" * 50)
 
-    log("🔑 Conectando a Google Sheets...")
-    gc    = conectar_sheets()
-    sheet = gc.open_by_key(SHEET_ID)
-    log("✅ Conectado")
+    log("🔑 Conectando a Google APIs...")
+    creds        = obtener_credenciales()
+    gc           = conectar_sheets(creds)
+    drive_service = conectar_drive(creds)
+    sheet        = gc.open_by_key(SHEET_ID)
+    log("✅ Conectado a Sheets y Drive")
+    log("─" * 50)
+
+    # Resolver IDs dinámicamente antes de procesar
+    log("🔍 Buscando Sheets de origen en Drive...")
+    for nombre_fuente, config in FUENTES.items():
+        try:
+            config["sheet_id"] = obtener_sheet_id_por_nombre(
+                config["nombre_drive"], drive_service
+            )
+        except ValueError as e:
+            log(f"  ❌ {e}")
+            config["sheet_id"] = None
     log("─" * 50)
 
     for nombre_destino, config in FUENTES.items():
         log(f"📥 Leyendo {nombre_destino}...")
+
+        if not config.get("sheet_id"):
+            log(f"  ⚠️  Sin sheet_id para '{nombre_destino}', saltando...")
+            log("─" * 50)
+            continue
+
         try:
             sheet_origen = gc.open_by_key(config["sheet_id"])
             ws_origen    = sheet_origen.worksheet(config["pestana"])
@@ -369,8 +419,8 @@ def main():
 
             log(f"   Headers reales detectados en fila {fila_header_idx + 1}")
 
-            headers      = valores[fila_header_idx]
-            idx_validos  = [i for i, h in enumerate(headers) if h.strip() != ""]
+            headers         = valores[fila_header_idx]
+            idx_validos     = [i for i, h in enumerate(headers) if h.strip() != ""]
             headers_limpios = [headers[i] for i in idx_validos]
             filas_limpias   = [[fila[i] if i < len(fila) else "" for i in idx_validos]
                                 for fila in valores[fila_header_idx + 1:]]
