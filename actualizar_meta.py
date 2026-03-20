@@ -34,8 +34,9 @@ META_APP_ID       = "794814423158870"
 AD_ACCOUNT_ID     = "act_122669098066867"
 SHEET_ID          = "1evv-YemzQfKFUr4mZyLEqne2ALqPD6v8rzFUlp68fcE"
 
-# Días hacia atrás a descargar
-DIAS_ATRAS = 15
+# ⚠️  CARGA HISTÓRICA: 445 días cubre desde enero 2025 hasta hoy
+# Una vez completada la carga, volver a poner DIAS_ATRAS = 15
+DIAS_ATRAS = 445
 
 # Tamaño del chunk en días
 CHUNK_DAYS = 15
@@ -105,7 +106,6 @@ def get_insights_con_retry(account, fields, params, label=""):
                 time.sleep(espera)
                 espera = min(espera * 2, 600)
             else:
-                # Chunk irrecuperable: logeamos y devolvemos vacío para no romper el script
                 log(f"   ⚠️  Chunk saltado{' [' + label + ']' if label else ''} "
                     f"tras {intento} intento(s) — código {codigo}: {e.api_error_message()}")
                 return []
@@ -276,16 +276,16 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
         log(f"  ⚠️  '{nombre_pestaña}': DataFrame vacío, se omite escritura.")
         return
 
+    # Convertir columnas numéricas del df nuevo
+    for col in df.columns:
+        try:
+            df[col] = pd.to_numeric(df[col])
+        except (ValueError, TypeError):
+            pass
+
     for intento in range(3):
         try:
             ws = sheet.worksheet(nombre_pestaña)
-
-            for col in df.columns:
-                try:
-                    df[col] = pd.to_numeric(df[col])
-                except (ValueError, TypeError):
-                    pass
-
             existentes = ws.get_all_records()
 
             if not existentes:
@@ -293,7 +293,30 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
                 log(f"  ✅ '{nombre_pestaña}': {len(df)} filas escritas (primera vez)")
                 return
 
-            df_exist  = pd.DataFrame(existentes)
+            df_exist = pd.DataFrame(existentes)
+
+            # Normalizar tipos del df existente para que coincidan con df nuevo
+            for col in df.columns:
+                if col in df_exist.columns and col not in claves:
+                    try:
+                        if pd.api.types.is_numeric_dtype(df[col]):
+                            df_exist[col] = pd.to_numeric(
+                                df_exist[col].astype(str)
+                                    .str.replace(".", "", regex=False)
+                                    .str.replace(",", ".", regex=False)
+                                    .str.strip(),
+                                errors="coerce"
+                            ).fillna(0)
+                    except Exception:
+                        pass
+
+            # Normalizar claves como strings en ambos
+            for clave in claves:
+                if clave in df_exist.columns:
+                    df_exist[clave] = df_exist[clave].astype(str).str.strip()
+                if clave in df.columns:
+                    df[clave] = df[clave].astype(str).str.strip()
+
             df_merged = (
                 pd.concat([df_exist, df], ignore_index=True)
                 .drop_duplicates(subset=claves, keep="last")
