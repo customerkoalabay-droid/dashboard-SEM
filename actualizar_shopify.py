@@ -32,7 +32,7 @@ from google.oauth2.service_account import Credentials
 # ============================================================
 SHEET_ID   = "1j84VyucNRrRx7haLKm16ppRuaL28p5BaX75D4BHaqWs"
 PESTANA    = "shopify_orders"
-DIAS_ATRAS = 440
+DIAS_ATRAS = 30
 
 SHOPIFY_STORE  = os.environ.get("SHOPIFY_STORE", "koalabay")
 SHOPIFY_KEY    = os.environ.get("SHOPIFY_API_KEY")
