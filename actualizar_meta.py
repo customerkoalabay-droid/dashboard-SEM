@@ -36,7 +36,7 @@ SHEET_ID          = "1evv-YemzQfKFUr4mZyLEqne2ALqPD6v8rzFUlp68fcE"
 
 # ⚠️  CARGA HISTÓRICA: 445 días cubre desde enero 2025 hasta hoy
 # Una vez completada la carga, volver a poner DIAS_ATRAS = 15
-DIAS_ATRAS = 15
+DIAS_ATRAS = 30
 
 # Tamaño del chunk en días
 CHUNK_DAYS = 15
@@ -164,10 +164,10 @@ def get_campaign_metrics(account, desde, hasta):
                 "adset":        i.get("adset_name"),
                 "impresiones":  i.get("impressions", 0),
                 "clics":        i.get("clicks", 0),
-                "gasto":        i.get("spend", 0),
+                "gasto": float(i.get("spend") or 0),
                 "alcance":      i.get("reach", 0),
-                "ctr":          i.get("ctr", 0),
-                "cpc":          i.get("cpc", 0),
+                "ctr":   float(i.get("ctr")   or 0),
+                "cpc":   float(i.get("cpc")   or 0),
                 "conversiones": conv,
             })
         time.sleep(PAUSA_ENTRE_CHUNKS)
@@ -193,9 +193,9 @@ def get_creative_performance(account, desde, hasta):
                 "campaña":      i.get("campaign_name"),
                 "impresiones":  i.get("impressions", 0),
                 "clics":        i.get("clicks", 0),
-                "gasto":        i.get("spend", 0),
-                "ctr":          i.get("ctr", 0),
-                "cpc":          i.get("cpc", 0),
+                "gasto": float(i.get("spend") or 0),
+                "ctr":   float(i.get("ctr")   or 0),
+                "cpc":   float(i.get("cpc")   or 0),
                 "conversiones": conv,
             })
         time.sleep(PAUSA_ENTRE_CHUNKS)
@@ -224,10 +224,10 @@ def get_breakdown(account, breakdown, desde, hasta, nivel="adset"):
                 "adset":              i.get("adset_name"),
                 "impresiones":        i.get("impressions", 0),
                 "clics":              i.get("clicks", 0),
-                "gasto":              i.get("spend", 0),
+                "gasto": float(i.get("spend") or 0),
                 "alcance":            i.get("reach", 0),
-                "ctr":                i.get("ctr", 0),
-                "cpc":                i.get("cpc", 0),
+                "ctr":   float(i.get("ctr")   or 0),
+                "cpc":   float(i.get("cpc")   or 0),
                 "conversiones":       conv,
                 "valor_conversiones": valor,
                 "mercado":            extraer_mercado(i.get("campaign_name")),
