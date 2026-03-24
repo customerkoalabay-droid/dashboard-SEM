@@ -40,7 +40,6 @@ SHEET_ID = "1QV-qOoxjdgBNAwxlqYcKyj-EJ_KAEIS8J7TjHsPm0go"  # Dashboard Google Ad
 
 FUENTES = {
     "gads_campaigns": {
-        # nombre exacto del Sheet que genera Google Ads en Drive
         "nombre_drive": "gads_campaigns",
         "pestana":      "Hoja 1",
         "destino":      "Gads_campaigns",
@@ -94,11 +93,6 @@ def conectar_drive(creds):
 # ── Búsqueda dinámica de Sheet ID en Drive ───────────────────
 
 def obtener_sheet_id_por_nombre(nombre, drive_service):
-    """
-    Busca en Google Drive el Sheet más reciente cuyo nombre coincida
-    exactamente con `nombre`. Útil cuando Google Ads genera un Sheet
-    nuevo cada día con distinto ID pero el mismo nombre.
-    """
     resultado = drive_service.files().list(
         q=f"name='{nombre}' and mimeType='application/vnd.google-apps.spreadsheet' and trashed=false",
         orderBy="createdTime desc",
@@ -228,6 +222,8 @@ def extraer_mercado(nombre):
     if n.startswith("ES_"): return "España"
     if n.startswith("DE_"): return "Alemania"
     if n.startswith("FR_"): return "Francia"
+    if n.startswith("UK_"): return "Reino Unido"
+    if n.startswith("BE_"): return "Bélgica"
     return "Otro"
 
 
@@ -248,13 +244,23 @@ def extraer_tipo(nombre):
 def normalizar_tipos_para_merge(df_exist, df_nuevo, claves):
     """
     df_exist viene todo como strings desde get_all_values().
-    Convertimos las columnas numéricas de df_exist al mismo tipo que df_nuevo
-    para que drop_duplicates funcione correctamente.
+    Limpiamos formato europeo (puntos de miles, comas decimales) antes
+    de convertir a numérico, para evitar que valores válidos se conviertan a 0.
     """
     for col in df_nuevo.columns:
         if col in df_exist.columns and col not in claves:
             try:
                 if pd.api.types.is_numeric_dtype(df_nuevo[col]):
+                    # Limpiar formato europeo antes de convertir
+                    df_exist[col] = (
+                        df_exist[col]
+                        .astype(str)
+                        .str.strip()
+                        .str.replace("€", "", regex=False)
+                        .str.replace("%", "", regex=False)
+                        .str.replace(".", "", regex=False)   # separador de miles
+                        .str.replace(",", ".", regex=False)  # decimal europeo → punto
+                    )
                     df_exist[col] = pd.to_numeric(df_exist[col], errors="coerce").fillna(0)
             except Exception:
                 pass
@@ -270,7 +276,7 @@ def normalizar_tipos_para_merge(df_exist, df_nuevo, claves):
 
 # ── Upsert en Google Sheets ──────────────────────────────────
 
-def upsert_sheet(sheet, df, nombre_pestaña, claves):
+def upsert_sheet(sheet, df, nombre_pestana, claves):
     log(f"   Columnas en df ({len(df.columns)}): {list(df.columns)}")
     log(f"   Claves buscadas: {claves}")
 
@@ -285,14 +291,14 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
 
     for intento in range(3):
         try:
-            ws = sheet.worksheet(nombre_pestaña)
+            ws = sheet.worksheet(nombre_pestana)
             valores_exist = ws.get_all_values()
 
             if not valores_exist or len(valores_exist) < 2:
                 ws.clear()
                 data = [df.columns.tolist()] + df.fillna("").values.tolist()
                 _write_in_chunks(ws, data)
-                log(f"  ✅ '{nombre_pestaña}': {len(df)} filas escritas (primera vez)")
+                log(f"  ✅ '{nombre_pestana}': {len(df)} filas escritas (primera vez)")
                 return
 
             h_exist      = valores_exist[0]
@@ -312,7 +318,7 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
                 ws.clear()
                 data = [df.columns.tolist()] + df.fillna("").values.tolist()
                 _write_in_chunks(ws, data)
-                log(f"  ✅ '{nombre_pestaña}': {len(df)} filas escritas (reescritura completa)")
+                log(f"  ✅ '{nombre_pestana}': {len(df)} filas escritas (reescritura completa)")
                 return
 
             df_exist, df = normalizar_tipos_para_merge(df_exist, df, claves_merge)
@@ -329,19 +335,19 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
             _write_in_chunks(ws, data)
 
             nuevas = len(df_merged) - n_antes
-            log(f"  ✅ '{nombre_pestaña}': {len(df_merged)} filas totales "
+            log(f"  ✅ '{nombre_pestana}': {len(df_merged)} filas totales "
                 f"({max(nuevas, 0)} nuevas / {len(df)} procesadas)")
             return
 
         except Exception as e:
             import traceback
-            log(f"  ⚠️  Intento {intento+1} fallido en '{nombre_pestaña}': {e}")
+            log(f"  ⚠️  Intento {intento+1} fallido en '{nombre_pestana}': {e}")
             log(f"      {traceback.format_exc().splitlines()[-1]}")
             if intento < 2:
                 log("  🔄 Reintentando en 5s...")
                 time.sleep(5)
             else:
-                log(f"  ❌ No se pudo actualizar '{nombre_pestaña}' tras 3 intentos")
+                log(f"  ❌ No se pudo actualizar '{nombre_pestana}' tras 3 intentos")
 
 
 def _write_in_chunks(ws, data, chunk_rows=5000):
@@ -371,14 +377,13 @@ def main():
     log("─" * 50)
 
     log("🔑 Conectando a Google APIs...")
-    creds        = obtener_credenciales()
-    gc           = conectar_sheets(creds)
+    creds         = obtener_credenciales()
+    gc            = conectar_sheets(creds)
     drive_service = conectar_drive(creds)
-    sheet        = gc.open_by_key(SHEET_ID)
+    sheet         = gc.open_by_key(SHEET_ID)
     log("✅ Conectado a Sheets y Drive")
     log("─" * 50)
 
-    # Resolver IDs dinámicamente antes de procesar
     log("🔍 Buscando Sheets de origen en Drive...")
     for nombre_fuente, config in FUENTES.items():
         try:
