@@ -36,7 +36,7 @@ SHEET_ID          = "1evv-YemzQfKFUr4mZyLEqne2ALqPD6v8rzFUlp68fcE"
 
 # ⚠️  CARGA HISTÓRICA: 445 días cubre desde enero 2025 hasta hoy
 # Una vez completada la carga, volver a poner DIAS_ATRAS = 15
-DIAS_ATRAS = 30
+DIAS_ATRAS = 450
 
 # Tamaño del chunk en días
 CHUNK_DAYS = 15
