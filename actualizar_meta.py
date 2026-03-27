@@ -148,7 +148,7 @@ def parsear_conversiones(insight):
 
 def get_campaign_metrics(account, desde, hasta):
     fields = ["campaign_name", "adset_name", "impressions", "clicks",
-              "spend", "reach", "ctr", "cpc", "actions"]
+              "spend", "reach", "ctr", "cpc", "actions", "action_values"]  # ← action_values añadido
     params_base = {"level": "adset", "time_increment": 1}
     all_rows = []
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
@@ -157,18 +157,19 @@ def get_campaign_metrics(account, desde, hasta):
         items = get_insights_con_retry(account, fields, params,
                                        label=f"campaign_metrics {chunk_desde}")
         for i in items:
-            conv, _ = parsear_conversiones(i)
+            conv, valor = parsear_conversiones(i)  # ← valor recogido
             all_rows.append({
-                "fecha":        i.get("date_start"),
-                "campaña":      i.get("campaign_name"),
-                "adset":        i.get("adset_name"),
-                "impresiones":  i.get("impressions", 0),
-                "clics":        i.get("clicks", 0),
-                "gasto": float(i.get("spend") or 0),
-                "alcance":      i.get("reach", 0),
-                "ctr":   float(i.get("ctr")   or 0),
-                "cpc":   float(i.get("cpc")   or 0),
-                "conversiones": conv,
+                "fecha":               i.get("date_start"),
+                "campaña":             i.get("campaign_name"),
+                "adset":               i.get("adset_name"),
+                "impresiones":         i.get("impressions", 0),
+                "clics":               i.get("clicks", 0),
+                "gasto":       float(i.get("spend") or 0),
+                "alcance":             i.get("reach", 0),
+                "ctr":         float(i.get("ctr")   or 0),
+                "cpc":         float(i.get("cpc")   or 0),
+                "conversiones":        conv,
+                "valor_conversiones":  float(valor or 0),  # ← añadido
             })
         time.sleep(PAUSA_ENTRE_CHUNKS)
     return pd.DataFrame(all_rows)
@@ -176,7 +177,7 @@ def get_campaign_metrics(account, desde, hasta):
 
 def get_creative_performance(account, desde, hasta):
     fields = ["ad_name", "adset_name", "campaign_name", "impressions",
-              "clicks", "spend", "ctr", "cpc", "actions"]
+              "clicks", "spend", "ctr", "cpc", "actions", "action_values"]  # ← action_values añadido
     params_base = {"level": "ad", "time_increment": 1}
     all_rows = []
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
@@ -185,18 +186,19 @@ def get_creative_performance(account, desde, hasta):
         items = get_insights_con_retry(account, fields, params,
                                        label=f"creative {chunk_desde}")
         for i in items:
-            conv, _ = parsear_conversiones(i)
+            conv, valor = parsear_conversiones(i)  # ← valor recogido
             all_rows.append({
-                "fecha":        i.get("date_start"),
-                "anuncio":      i.get("ad_name"),
-                "adset":        i.get("adset_name"),
-                "campaña":      i.get("campaign_name"),
-                "impresiones":  i.get("impressions", 0),
-                "clics":        i.get("clicks", 0),
-                "gasto": float(i.get("spend") or 0),
-                "ctr":   float(i.get("ctr")   or 0),
-                "cpc":   float(i.get("cpc")   or 0),
-                "conversiones": conv,
+                "fecha":               i.get("date_start"),
+                "anuncio":             i.get("ad_name"),
+                "adset":               i.get("adset_name"),
+                "campaña":             i.get("campaign_name"),
+                "impresiones":         i.get("impressions", 0),
+                "clics":               i.get("clicks", 0),
+                "gasto":       float(i.get("spend") or 0),
+                "ctr":         float(i.get("ctr")   or 0),
+                "cpc":         float(i.get("cpc")   or 0),
+                "conversiones":        conv,
+                "valor_conversiones":  float(valor or 0),  # ← añadido
             })
         time.sleep(PAUSA_ENTRE_CHUNKS)
     return pd.DataFrame(all_rows)
@@ -219,19 +221,19 @@ def get_breakdown(account, breakdown, desde, hasta, nivel="adset"):
         for i in items:
             conv, valor = parsear_conversiones(i)
             row = {
-                "fecha":              i.get("date_start"),
-                "campaña":            i.get("campaign_name"),
-                "adset":              i.get("adset_name"),
-                "impresiones":        i.get("impressions", 0),
-                "clics":              i.get("clicks", 0),
-                "gasto": float(i.get("spend") or 0),
-                "alcance":            i.get("reach", 0),
-                "ctr":   float(i.get("ctr")   or 0),
-                "cpc":   float(i.get("cpc")   or 0),
-                "conversiones":       conv,
-                "valor_conversiones": valor,
-                "mercado":            extraer_mercado(i.get("campaign_name")),
-                "tipo_campaña":       extraer_tipo(i.get("campaign_name")),
+                "fecha":               i.get("date_start"),
+                "campaña":             i.get("campaign_name"),
+                "adset":               i.get("adset_name"),
+                "impresiones":         i.get("impressions", 0),
+                "clics":               i.get("clicks", 0),
+                "gasto":       float(i.get("spend") or 0),
+                "alcance":             i.get("reach", 0),
+                "ctr":         float(i.get("ctr")   or 0),
+                "cpc":         float(i.get("cpc")   or 0),
+                "conversiones":        conv,
+                "valor_conversiones":  float(valor or 0),
+                "mercado":             extraer_mercado(i.get("campaign_name")),
+                "tipo_campaña":        extraer_tipo(i.get("campaign_name")),
             }
             if breakdown == ["age", "gender"]:
                 row["edad"]        = i.get("age")
