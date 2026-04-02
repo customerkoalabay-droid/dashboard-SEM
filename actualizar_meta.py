@@ -36,7 +36,7 @@ SHEET_ID          = "1evv-YemzQfKFUr4mZyLEqne2ALqPD6v8rzFUlp68fcE"
 
 # ⚠️  CARGA HISTÓRICA: 445 días cubre desde enero 2025 hasta hoy
 # Una vez completada la carga, volver a poner DIAS_ATRAS = 15
-DIAS_ATRAS = 15
+DIAS_ATRAS = 445  # <--- Puesto a 445 para tu descarga completa
 
 # Tamaño del chunk en días
 CHUNK_DAYS = 15
@@ -148,7 +148,7 @@ def parsear_conversiones(insight):
 
 def get_campaign_metrics(account, desde, hasta):
     fields = ["campaign_name", "adset_name", "impressions", "clicks",
-              "spend", "reach", "ctr", "cpc", "actions", "action_values"]  # ← action_values añadido
+              "spend", "reach", "ctr", "cpc", "actions", "action_values"]  
     params_base = {"level": "adset", "time_increment": 1}
     all_rows = []
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
@@ -157,19 +157,19 @@ def get_campaign_metrics(account, desde, hasta):
         items = get_insights_con_retry(account, fields, params,
                                        label=f"campaign_metrics {chunk_desde}")
         for i in items:
-            conv, valor = parsear_conversiones(i)  # ← valor recogido
+            conv, valor = parsear_conversiones(i)  
             all_rows.append({
                 "fecha":               i.get("date_start"),
                 "campaña":             i.get("campaign_name"),
                 "adset":               i.get("adset_name"),
                 "impresiones":         i.get("impressions", 0),
                 "clics":               i.get("clicks", 0),
-                "gasto":       float(i.get("spend") or 0),
+                "gasto":               float(i.get("spend") or 0),
                 "alcance":             i.get("reach", 0),
-                "ctr":         float(i.get("ctr")   or 0),
-                "cpc":         float(i.get("cpc")   or 0),
+                "ctr":                 float(i.get("ctr")   or 0),
+                "cpc":                 float(i.get("cpc")   or 0),
                 "conversiones":        conv,
-                "valor_conversiones":  float(valor or 0),  # ← añadido
+                "valor_conversiones":  float(valor or 0),  
             })
         time.sleep(PAUSA_ENTRE_CHUNKS)
     return pd.DataFrame(all_rows)
@@ -177,7 +177,7 @@ def get_campaign_metrics(account, desde, hasta):
 
 def get_creative_performance(account, desde, hasta):
     fields = ["ad_name", "adset_name", "campaign_name", "impressions",
-              "clicks", "spend", "ctr", "cpc", "actions", "action_values"]  # ← action_values añadido
+              "clicks", "spend", "ctr", "cpc", "actions", "action_values"]  
     params_base = {"level": "ad", "time_increment": 1}
     all_rows = []
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
@@ -186,7 +186,7 @@ def get_creative_performance(account, desde, hasta):
         items = get_insights_con_retry(account, fields, params,
                                        label=f"creative {chunk_desde}")
         for i in items:
-            conv, valor = parsear_conversiones(i)  # ← valor recogido
+            conv, valor = parsear_conversiones(i)  
             all_rows.append({
                 "fecha":               i.get("date_start"),
                 "anuncio":             i.get("ad_name"),
@@ -194,11 +194,11 @@ def get_creative_performance(account, desde, hasta):
                 "campaña":             i.get("campaign_name"),
                 "impresiones":         i.get("impressions", 0),
                 "clics":               i.get("clicks", 0),
-                "gasto":       float(i.get("spend") or 0),
-                "ctr":         float(i.get("ctr")   or 0),
-                "cpc":         float(i.get("cpc")   or 0),
+                "gasto":               float(i.get("spend") or 0),
+                "ctr":                 float(i.get("ctr")   or 0),
+                "cpc":                 float(i.get("cpc")   or 0),
                 "conversiones":        conv,
-                "valor_conversiones":  float(valor or 0),  # ← añadido
+                "valor_conversiones":  float(valor or 0),  
             })
         time.sleep(PAUSA_ENTRE_CHUNKS)
     return pd.DataFrame(all_rows)
@@ -226,10 +226,10 @@ def get_breakdown(account, breakdown, desde, hasta, nivel="adset"):
                 "adset":               i.get("adset_name"),
                 "impresiones":         i.get("impressions", 0),
                 "clics":               i.get("clicks", 0),
-                "gasto":       float(i.get("spend") or 0),
+                "gasto":               float(i.get("spend") or 0),
                 "alcance":             i.get("reach", 0),
-                "ctr":         float(i.get("ctr")   or 0),
-                "cpc":         float(i.get("cpc")   or 0),
+                "ctr":                 float(i.get("ctr")   or 0),
+                "cpc":                 float(i.get("cpc")   or 0),
                 "conversiones":        conv,
                 "valor_conversiones":  float(valor or 0),
                 "mercado":             extraer_mercado(i.get("campaign_name")),
@@ -271,7 +271,7 @@ def extraer_tipo(nombre):
     return "Otro"
 
 
-# ── Upsert en Google Sheets ──────────────────────────────────
+# ── Upsert en Google Sheets (CORREGIDO) ──────────────────────
 
 def upsert_sheet(sheet, df, nombre_pestaña, claves):
     if df.empty:
@@ -302,11 +302,15 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
                 if col in df_exist.columns and col not in claves:
                     try:
                         if pd.api.types.is_numeric_dtype(df[col]):
+                            
+                            # Función auxiliar para limpiar solo si es texto
+                            def limpiar_numeros(x):
+                                if isinstance(x, str):
+                                    return x.replace(".", "").replace(",", ".").strip()
+                                return x
+                            
                             df_exist[col] = pd.to_numeric(
-                                df_exist[col].astype(str)
-                                    .str.replace(".", "", regex=False)
-                                    .str.replace(",", ".", regex=False)
-                                    .str.strip(),
+                                df_exist[col].apply(limpiar_numeros), 
                                 errors="coerce"
                             ).fillna(0)
                     except Exception:
