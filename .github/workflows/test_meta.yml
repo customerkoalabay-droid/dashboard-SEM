@@ -1,4 +1,4 @@
-name: Actualizar meta manual
+name: Test meta manual
 
 on:
   workflow_dispatch:
