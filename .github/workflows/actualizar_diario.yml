@@ -2,7 +2,7 @@ name: Actualizar dashboard diario
 
 on:
   schedule:
-    - cron: '0 4 * * *'  # 6:00h España invierno / 7:00h verano
+    - cron: '58 5 * * *'  # 6:00h España invierno / 7:00h verano
   workflow_dispatch:
 
 jobs:
