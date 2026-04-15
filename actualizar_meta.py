@@ -3,14 +3,7 @@ actualizar_meta.py
 ------------------
 Script de actualización diaria: descarga los últimos N días de Meta Ads
 y hace upsert en Google Sheets (no borra el histórico).
-
-Autenticación: Google Service Account (compatible con GitHub Actions)
-
-Uso local:
-    python actualizar_meta.py
-
-Requisitos:
-    pip install gspread google-auth facebook-business pandas
+Corregido: Normalización de decimales y tipos numéricos.
 """
 
 import json
@@ -26,7 +19,7 @@ from facebook_business.exceptions import FacebookRequestError
 from google.oauth2.service_account import Credentials
 
 # ============================================================
-# CONFIGURACIÓN — edita solo esta sección
+# CONFIGURACIÓN
 # ============================================================
 META_ACCESS_TOKEN = os.environ.get("META_ACCESS_TOKEN", "")
 META_APP_SECRET   = "51a7369b56ff58ac9d90723fe3dd19a2"
@@ -34,38 +27,26 @@ META_APP_ID       = "794814423158870"
 AD_ACCOUNT_ID     = "act_122669098066867"
 SHEET_ID          = "1evv-YemzQfKFUr4mZyLEqne2ALqPD6v8rzFUlp68fcE"
 
-# ⚠️  CARGA HISTÓRICA: 445 días cubre desde enero 2025 hasta hoy
-# Una vez completada la carga, volver a poner DIAS_ATRAS = 15
-DIAS_ATRAS = 15  # <--- Puesto a 445 para tu descarga completa
-
-# Tamaño del chunk en días
+DIAS_ATRAS = 15  
 CHUNK_DAYS = 15
-
-# Pausa entre chunks (segundos)
 PAUSA_ENTRE_CHUNKS = 5
 
-# Reintentos ante errores transitorios
-RETRY_WAIT_INICIAL = 60   # segundos — se duplica en cada reintento
-RETRY_MAX_INTENTOS = 4    # tras estos intentos, se salta el chunk y continúa
+RETRY_WAIT_INICIAL = 60
+RETRY_MAX_INTENTOS = 4
 
 SCOPES = [
     "https://www.googleapis.com/auth/spreadsheets",
     "https://www.googleapis.com/auth/drive",
 ]
-# ============================================================
 
-# Códigos que se reintentan siempre, independientemente de is_transient
 CODIGOS_REINTENTABLES = {2, 4, 17, 32, 613}
-
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
-
 # ── Utilidades de fechas ─────────────────────────────────────
 
 def chunked_date_ranges(desde, hasta, chunk_days=15):
-    """Divide un rango de fechas en trozos de chunk_days días."""
     inicio = datetime.strptime(desde, "%Y-%m-%d")
     fin    = datetime.strptime(hasta, "%Y-%m-%d")
     ranges = []
@@ -76,18 +57,10 @@ def chunked_date_ranges(desde, hasta, chunk_days=15):
         cursor = tramo_fin + timedelta(days=1)
     return ranges
 
-
-# ── Retry con backoff exponencial + skip si el chunk es irrecuperable ────────
+# ── Retry con Meta API ───────────────────────────────────────
 
 def get_insights_con_retry(account, fields, params, label=""):
-    """
-    Llama a account.get_insights con reintentos ante errores transitorios.
-    - Reintenta siempre los códigos en CODIGOS_REINTENTABLES (ignora is_transient).
-    - Si tras RETRY_MAX_INTENTOS sigue fallando, devuelve [] y logea advertencia
-      para no abortar el script por un único chunk problemático.
-    """
     espera = RETRY_WAIT_INICIAL
-
     for intento in range(1, RETRY_MAX_INTENTOS + 1):
         try:
             rows = []
@@ -95,27 +68,21 @@ def get_insights_con_retry(account, fields, params, label=""):
             for item in cursor:
                 rows.append(item)
             return rows
-
         except FacebookRequestError as e:
             codigo = e.api_error_code()
             debe_reintentar = codigo in CODIGOS_REINTENTABLES or e.api_transient_error()
-
             if debe_reintentar and intento < RETRY_MAX_INTENTOS:
-                log(f"   ⏳ Error Meta código {codigo}{' [' + label + ']' if label else ''}. "
-                    f"Esperando {espera}s (intento {intento}/{RETRY_MAX_INTENTOS - 1})...")
+                log(f"   ⏳ Error Meta {codigo} [{label}]. Reintento {intento}...")
                 time.sleep(espera)
                 espera = min(espera * 2, 600)
             else:
-                log(f"   ⚠️  Chunk saltado{' [' + label + ']' if label else ''} "
-                    f"tras {intento} intento(s) — código {codigo}: {e.api_error_message()}")
+                log(f"   ⚠️ Chunk saltado [{label}] - Error {codigo}: {e.api_error_message()}")
                 return []
-
         except Exception as e:
-            log(f"   ⚠️  Error inesperado{' [' + label + ']' if label else ''}: {e}")
+            log(f"   ⚠️ Error inesperado [{label}]: {e}")
             return []
 
-
-# ── Autenticación ────────────────────────────────────────────
+# ── Conexiones ───────────────────────────────────────────────
 
 def conectar_sheets():
     sa_json = os.environ.get("GOOGLE_SERVICE_ACCOUNT")
@@ -127,13 +94,11 @@ def conectar_sheets():
     creds = Credentials.from_service_account_info(info, scopes=SCOPES)
     return gspread.authorize(creds)
 
-
 def conectar_meta():
     FacebookAdsApi.init(META_APP_ID, META_APP_SECRET, META_ACCESS_TOKEN)
     return AdAccount(AD_ACCOUNT_ID)
 
-
-# ── Extracción de datos ──────────────────────────────────────
+# ── Extracción y Procesamiento ──────────────────────────────
 
 def parsear_conversiones(insight):
     conversiones, valor = 0, 0
@@ -145,145 +110,118 @@ def parsear_conversiones(insight):
             valor = action["value"]
     return conversiones, valor
 
-
 def get_campaign_metrics(account, desde, hasta):
-    fields = ["campaign_name", "adset_name", "impressions", "clicks",
-              "spend", "reach", "ctr", "cpc", "actions", "action_values"]  
+    fields = ["campaign_name", "adset_name", "impressions", "clicks", "spend", "reach", "ctr", "cpc", "actions", "action_values"]
     params_base = {"level": "adset", "time_increment": 1}
     all_rows = []
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
-        log(f"   → Chunk {chunk_desde} / {chunk_hasta}")
         params = {**params_base, "time_range": {"since": chunk_desde, "until": chunk_hasta}}
-        items = get_insights_con_retry(account, fields, params,
-                                       label=f"campaign_metrics {chunk_desde}")
+        items = get_insights_con_retry(account, fields, params, label=f"camp_{chunk_desde}")
         for i in items:
-            conv, valor = parsear_conversiones(i)  
+            conv, valor = parsear_conversiones(i)
             all_rows.append({
-                "fecha":               i.get("date_start"),
-                "campaña":             i.get("campaign_name"),
-                "adset":               i.get("adset_name"),
-                "impresiones":         i.get("impressions", 0),
-                "clics":               i.get("clicks", 0),
-                "gasto":               float(i.get("spend") or 0),
-                "alcance":             i.get("reach", 0),
-                "ctr":                 float(i.get("ctr")   or 0),
-                "cpc":                 float(i.get("cpc")   or 0),
-                "conversiones":        conv,
-                "valor_conversiones":  float(valor or 0),  
+                "fecha": i.get("date_start"),
+                "campaña": i.get("campaign_name"),
+                "adset": i.get("adset_name"),
+                "impresiones": int(i.get("impressions", 0)),
+                "clics": int(i.get("clicks", 0)),
+                "gasto": float(i.get("spend") or 0),
+                "alcance": int(i.get("reach", 0)),
+                "ctr": float(i.get("ctr") or 0),
+                "cpc": float(i.get("cpc") or 0),
+                "conversiones": conv,
+                "valor_conversiones": float(valor or 0),
             })
-        time.sleep(PAUSA_ENTRE_CHUNKS)
     return pd.DataFrame(all_rows)
 
-
 def get_creative_performance(account, desde, hasta):
-    fields = ["ad_name", "adset_name", "campaign_name", "impressions",
-              "clicks", "spend", "ctr", "cpc", "actions", "action_values"]  
+    fields = ["ad_name", "adset_name", "campaign_name", "impressions", "clicks", "spend", "ctr", "cpc", "actions", "action_values"]
     params_base = {"level": "ad", "time_increment": 1}
     all_rows = []
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
-        log(f"   → Chunk {chunk_desde} / {chunk_hasta}")
         params = {**params_base, "time_range": {"since": chunk_desde, "until": chunk_hasta}}
-        items = get_insights_con_retry(account, fields, params,
-                                       label=f"creative {chunk_desde}")
+        items = get_insights_con_retry(account, fields, params, label=f"crea_{chunk_desde}")
         for i in items:
-            conv, valor = parsear_conversiones(i)  
+            conv, valor = parsear_conversiones(i)
             all_rows.append({
-                "fecha":               i.get("date_start"),
-                "anuncio":             i.get("ad_name"),
-                "adset":               i.get("adset_name"),
-                "campaña":             i.get("campaign_name"),
-                "impresiones":         i.get("impressions", 0),
-                "clics":               i.get("clicks", 0),
-                "gasto":               float(i.get("spend") or 0),
-                "ctr":                 float(i.get("ctr")   or 0),
-                "cpc":                 float(i.get("cpc")   or 0),
-                "conversiones":        conv,
-                "valor_conversiones":  float(valor or 0),  
+                "fecha": i.get("date_start"),
+                "anuncio": i.get("ad_name"),
+                "adset": i.get("adset_name"),
+                "campaña": i.get("campaign_name"),
+                "impresiones": int(i.get("impressions", 0)),
+                "clics": int(i.get("clicks", 0)),
+                "gasto": float(i.get("spend") or 0),
+                "ctr": float(i.get("ctr") or 0),
+                "cpc": float(i.get("cpc") or 0),
+                "conversiones": conv,
+                "valor_conversiones": float(valor or 0),
             })
-        time.sleep(PAUSA_ENTRE_CHUNKS)
     return pd.DataFrame(all_rows)
 
-
 def get_breakdown(account, breakdown, desde, hasta, nivel="adset"):
-    fields = ["campaign_name", "adset_name", "impressions", "clicks",
-              "spend", "reach", "ctr", "cpc", "actions", "action_values"]
-    params_base = {
-        "level": nivel,
-        "time_increment": 1,
-        "breakdowns": breakdown,
-    }
+    fields = ["campaign_name", "adset_name", "impressions", "clicks", "spend", "reach", "ctr", "cpc", "actions", "action_values"]
+    params_base = {"level": nivel, "time_increment": 1, "breakdowns": breakdown}
     all_rows = []
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
-        log(f"   → Chunk {chunk_desde} / {chunk_hasta}")
         params = {**params_base, "time_range": {"since": chunk_desde, "until": chunk_hasta}}
-        items = get_insights_con_retry(account, fields, params,
-                                       label=f"{breakdown[0]} {chunk_desde}")
+        items = get_insights_con_retry(account, fields, params, label=f"break_{breakdown[0]}")
         for i in items:
             conv, valor = parsear_conversiones(i)
             row = {
-                "fecha":               i.get("date_start"),
-                "campaña":             i.get("campaign_name"),
-                "adset":               i.get("adset_name"),
-                "impresiones":         i.get("impressions", 0),
-                "clics":               i.get("clicks", 0),
-                "gasto":               float(i.get("spend") or 0),
-                "alcance":             i.get("reach", 0),
-                "ctr":                 float(i.get("ctr")   or 0),
-                "cpc":                 float(i.get("cpc")   or 0),
-                "conversiones":        conv,
-                "valor_conversiones":  float(valor or 0),
-                "mercado":             extraer_mercado(i.get("campaign_name")),
-                "tipo_campaña":        extraer_tipo(i.get("campaign_name")),
+                "fecha": i.get("date_start"),
+                "campaña": i.get("campaign_name"),
+                "adset": i.get("adset_name"),
+                "impresiones": int(i.get("impressions", 0)),
+                "clics": int(i.get("clicks", 0)),
+                "gasto": float(i.get("spend") or 0),
+                "alcance": int(i.get("reach", 0)),
+                "ctr": float(i.get("ctr") or 0),
+                "cpc": float(i.get("cpc") or 0),
+                "conversiones": conv,
+                "valor_conversiones": float(valor or 0),
+                "mercado": extraer_mercado(i.get("campaign_name")),
+                "tipo_campaña": extraer_tipo(i.get("campaign_name")),
             }
             if breakdown == ["age", "gender"]:
-                row["edad"]        = i.get("age")
-                row["genero"]      = i.get("gender")
+                row["edad"], row["genero"] = i.get("age"), i.get("gender")
             elif breakdown == ["publisher_platform", "platform_position"]:
-                row["plataforma"]  = i.get("publisher_platform")
-                row["placement"]   = i.get("platform_position")
+                row["plataforma"], row["placement"] = i.get("publisher_platform"), i.get("platform_position")
             elif breakdown == ["impression_device"]:
                 row["dispositivo"] = i.get("impression_device")
             elif breakdown == ["country"]:
-                row["pais"]        = i.get("country")
+                row["pais"] = i.get("country")
             all_rows.append(row)
-        time.sleep(PAUSA_ENTRE_CHUNKS)
     return pd.DataFrame(all_rows)
 
-
-# ── Clasificación ────────────────────────────────────────────
-
 def extraer_mercado(nombre):
-    if pd.isna(nombre) or nombre is None:
-        return "Desconocido"
-    n = str(nombre).upper()
+    n = str(nombre or "").upper()
     if n.startswith("ES_"): return "España"
     if n.startswith("DE_"): return "Alemania"
     if n.startswith("FR_"): return "Francia"
     return "Otro"
 
-
 def extraer_tipo(nombre):
-    if pd.isna(nombre) or nombre is None:
-        return "Desconocido"
-    n = str(nombre).upper()
+    n = str(nombre or "").upper()
     if "PROSPECTING" in n: return "Prospecting"
     if "REMARKETING" in n: return "Remarketing"
     return "Otro"
 
-
-# ── Upsert en Google Sheets (CORREGIDO) ──────────────────────
+# ── Upsert en Google Sheets (NORMALIZADO) ───────────────────
 
 def upsert_sheet(sheet, df, nombre_pestaña, claves):
     if df.empty:
-        log(f"  ⚠️  '{nombre_pestaña}': DataFrame vacío, se omite escritura.")
+        log(f"  ⚠️ '{nombre_pestaña}': DataFrame vacío.")
         return
 
-    # Convertir columnas numéricas del df nuevo
+    # Normalizar tipos en el nuevo DataFrame
+    cols_float = ["gasto", "valor_conversiones", "ctr", "cpc"]
+    cols_int = ["impresiones", "clics", "alcance", "conversiones"]
+
     for col in df.columns:
-        try:
-            df[col] = pd.to_numeric(df[col])
-        except (ValueError, TypeError):
-            pass
+        if col in cols_float:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(float)
+        elif col in cols_int:
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
 
     for intento in range(3):
         try:
@@ -291,60 +229,38 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
             existentes = ws.get_all_records()
 
             if not existentes:
-                ws.update([df.columns.tolist()] + df.fillna("").values.tolist())
-                log(f"  ✅ '{nombre_pestaña}': {len(df)} filas escritas (primera vez)")
+                ws.update([df.columns.tolist()] + df.fillna("").values.tolist(), value_input_option='USER_ENTERED')
+                log(f"  ✅ '{nombre_pestaña}': {len(df)} filas escritas.")
                 return
 
             df_exist = pd.DataFrame(existentes)
 
-            # Normalizar tipos del df existente para que coincidan con df nuevo
+            # Normalizar tipos en el DataFrame existente para comparación justa
             for col in df.columns:
-                if col in df_exist.columns and col not in claves:
-                    try:
-                        if pd.api.types.is_numeric_dtype(df[col]):
-                            
-                            # Función auxiliar para limpiar solo si es texto
-                            def limpiar_numeros(x):
-                                if isinstance(x, str):
-                                    return x.replace(".", "").replace(",", ".").strip()
-                                return x
-                            
-                            df_exist[col] = pd.to_numeric(
-                                df_exist[col].apply(limpiar_numeros), 
-                                errors="coerce"
-                            ).fillna(0)
-                    except Exception:
-                        pass
+                if col in df_exist.columns:
+                    if col in cols_float:
+                        df_exist[col] = pd.to_numeric(df_exist[col], errors='coerce').fillna(0).astype(float)
+                    elif col in cols_int:
+                        df_exist[col] = pd.to_numeric(df_exist[col], errors='coerce').fillna(0).astype(int)
 
-            # Normalizar claves como strings en ambos
+            # Normalizar claves como strings
             for clave in claves:
-                if clave in df_exist.columns:
-                    df_exist[clave] = df_exist[clave].astype(str).str.strip()
-                if clave in df.columns:
-                    df[clave] = df[clave].astype(str).str.strip()
+                if clave in df_exist.columns: df_exist[clave] = df_exist[clave].astype(str).str.strip()
+                if clave in df.columns: df[clave] = df[clave].astype(str).str.strip()
 
-            df_merged = (
-                pd.concat([df_exist, df], ignore_index=True)
-                .drop_duplicates(subset=claves, keep="last")
-                .sort_values(by=claves[0], ascending=False)
-            )
+            # Merge y eliminación de duplicados (mantenemos el último dato descargado)
+            df_merged = pd.concat([df_exist, df], ignore_index=True).drop_duplicates(subset=claves, keep="last")
+            df_merged = df_merged.sort_values(by=claves[0], ascending=False)
 
             ws.clear()
-            ws.update([df_merged.columns.tolist()] + df_merged.fillna("").values.tolist())
-
-            nuevas = len(df_merged) - len(df_exist)
-            log(f"  ✅ '{nombre_pestaña}': {len(df_merged)} filas totales "
-                f"({max(nuevas, 0)} nuevas / {len(df)} descargadas)")
+            # value_input_option='USER_ENTERED' es CRÍTICO para los decimales
+            ws.update([df_merged.columns.tolist()] + df_merged.fillna("").values.tolist(), value_input_option='USER_ENTERED')
+            log(f"  ✅ '{nombre_pestaña}': {len(df_merged)} filas totales.")
             return
 
         except Exception as e:
-            log(f"  ⚠️  Intento {intento+1} fallido en '{nombre_pestaña}': {e}")
-            if intento < 2:
-                log("  🔄 Reintentando en 5s...")
-                time.sleep(5)
-            else:
-                log(f"  ❌ No se pudo actualizar '{nombre_pestaña}' tras 3 intentos")
-
+            log(f"  ⚠️ Intento {intento+1} fallido en '{nombre_pestaña}': {e}")
+            time.sleep(5)
 
 # ── Main ─────────────────────────────────────────────────────
 
@@ -353,55 +269,33 @@ def main():
     desde = (ayer - timedelta(days=DIAS_ATRAS - 1)).strftime("%Y-%m-%d")
     hasta = ayer.strftime("%Y-%m-%d")
 
-    total_chunks = len(chunked_date_ranges(desde, hasta, CHUNK_DAYS))
-    log(f"🚀 Actualizando datos del {desde} al {hasta} "
-        f"({total_chunks} chunks de {CHUNK_DAYS} días)")
-    log("─" * 50)
-
-    log("🔑 Conectando a Google Sheets...")
-    gc    = conectar_sheets()
+    log(f"🚀 Iniciando del {desde} al {hasta}")
+    gc = conectar_sheets()
     sheet = gc.open_by_key(SHEET_ID)
-    log("✅ Google Sheets conectado")
-
-    log("🔑 Conectando a Meta API...")
     account = conectar_meta()
-    log("✅ Meta API conectada")
-    log("─" * 50)
 
-    # 1. Campaign metrics
+    # Ejecución de secciones
     log("📥 Descargando campaign_metrics...")
     df_campaigns = get_campaign_metrics(account, desde, hasta)
-    log(f"   {len(df_campaigns)} filas descargadas")
-    upsert_sheet(sheet, df_campaigns, "campaign_metrics",
-                 claves=["fecha", "campaña", "adset"])
-    time.sleep(2)
+    upsert_sheet(sheet, df_campaigns, "campaign_metrics", claves=["fecha", "campaña", "adset"])
 
-    # 2. Creative performance
     log("📥 Descargando creative_performance...")
     df_creatives = get_creative_performance(account, desde, hasta)
-    log(f"   {len(df_creatives)} filas descargadas")
-    upsert_sheet(sheet, df_creatives, "creative_performance",
-                 claves=["fecha", "campaña", "anuncio"])
-    time.sleep(2)
+    upsert_sheet(sheet, df_creatives, "creative_performance", claves=["fecha", "campaña", "anuncio"])
 
-    # 3. Breakdowns
     breakdowns = [
-        ("demographics", ["age", "gender"],                           ["fecha", "campaña", "edad", "genero"]),
-        ("platforms",    ["publisher_platform", "platform_position"], ["fecha", "campaña", "plataforma", "placement"]),
-        ("devices",      ["impression_device"],                       ["fecha", "campaña", "dispositivo"]),
-        ("countries",    ["country"],                                 ["fecha", "campaña", "pais"]),
+        ("demographics", ["age", "gender"], ["fecha", "campaña", "edad", "genero"]),
+        ("platforms", ["publisher_platform", "platform_position"], ["fecha", "campaña", "plataforma", "placement"]),
+        ("devices", ["impression_device"], ["fecha", "campaña", "dispositivo"]),
+        ("countries", ["country"], ["fecha", "campaña", "pais"]),
     ]
 
-    for nombre, breakdown, claves in breakdowns:
+    for nombre, bdown, claves in breakdowns:
         log(f"📥 Descargando {nombre}...")
-        df_bd = get_breakdown(account, breakdown, desde, hasta)
-        log(f"   {len(df_bd)} filas descargadas")
+        df_bd = get_breakdown(account, bdown, desde, hasta)
         upsert_sheet(sheet, df_bd, nombre, claves=claves)
-        time.sleep(2)
 
-    log("─" * 50)
     log("🎉 Actualización completada.")
-
 
 if __name__ == "__main__":
     main()
