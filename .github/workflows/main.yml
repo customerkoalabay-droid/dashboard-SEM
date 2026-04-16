@@ -10,15 +10,17 @@ jobs:
     runs-on: ubuntu-latest
     steps:
     - name: Checkout
-      uses: actions/checkout@v3
+      uses: actions/checkout@v4  # Actualizado a v4
 
     - name: Configurar Python
-      uses: actions/setup-python@v4
+      uses: actions/setup-python@v5 # Actualizado a v5
       with:
-        python-version: '3.9'
+        python-version: '3.12' # Usamos una versión de Python más reciente
 
     - name: Instalar dependencias
-      run: pip install google-analytics-data google-api-python-client google-auth
+      run: |
+        pip install --upgrade pip
+        pip install google-analytics-data google-api-python-client google-auth
 
     - name: Ejecutar script
       env:
