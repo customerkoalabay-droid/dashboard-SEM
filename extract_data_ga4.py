@@ -13,7 +13,6 @@ spreadsheet_id = os.environ['SPREADSHEET_ID']
 def get_analytics_data():
     client = BetaAnalyticsDataClient.from_service_account_info(credentials_info)
     
-    # Hemos añadido la dimensión 'country' para el desglose
     request = RunReportRequest(
         property=f"properties/{property_id}",
         dimensions=[
@@ -24,22 +23,25 @@ def get_analytics_data():
             Metric(name="activeUsers"),
             Metric(name="sessions")
         ],
-        # Extraemos lo de ayer para ir acumulando sin duplicar
-        date_ranges=[DateRange(start_date="yesterday", end_date="yesterday")],
+        date_ranges=[DateRange(start_date="2026-01-01", end_date="yesterday")],
     )
     
     response = client.run_report(request)
     
     values = []
     for row in response.rows:
-        # row.dimension_values[0] es la fecha
-        # row.dimension_values[1] es el país
+        # --- AJUSTE DE FECHA AQUÍ ---
+        fecha_ga4 = row.dimension_values[0].value  # Viene como "20260414"
+        # La convertimos a "2026-04-14"
+        fecha_formateada = f"{fecha_ga4[:4]}-{fecha_ga4[4:6]}-{fecha_ga4[6:]}"
+        
         values.append([
-            row.dimension_values[0].value, 
+            fecha_formateada, 
             row.dimension_values[1].value,
             row.metric_values[0].value, 
             row.metric_values[1].value
         ])
+    values.sort(key=lambda x: x[0])    
     return values
 
 def append_to_sheets(data):
