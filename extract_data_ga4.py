@@ -6,7 +6,7 @@ from googleapiclient.discovery import build
 from google.oauth2 import service_account
 
 # Cargar credenciales desde variables de entorno
-credentials_info = json.loads(os.environ['GA_SERVICE_ACCOUNT'])
+credentials_info = json.loads(os.environ['GOOGLE_SERVICE_ACCOUNT'])
 property_id = os.environ['GA_PROPERTY_ID']
 spreadsheet_id = os.environ['SPREADSHEET_ID']
 
