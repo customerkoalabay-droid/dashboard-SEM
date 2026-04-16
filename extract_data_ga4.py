@@ -26,7 +26,7 @@ def get_analytics_data():
             Metric(name="sessions")
         ],
         # Rango histórico forzado
-        date_ranges=[DateRange(start_date="2026-01-01", end_date="yesterday")],
+        date_ranges=[DateRange(start_date="yesterday", end_date="yesterday")],
     )
     
     response = client.run_report(request)
