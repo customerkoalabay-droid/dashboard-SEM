@@ -27,4 +27,4 @@ jobs:
         GA_SERVICE_ACCOUNT_JSON: ${{ secrets.GA_SERVICE_ACCOUNT_JSON }}
         GA_PROPERTY_ID: ${{ secrets.GA_PROPERTY_ID }}
         SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
-      run: python extract_data.py
+      run: python extract_data_ga4.py
