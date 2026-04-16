@@ -1,0 +1,28 @@
+name: Analytics a Google Sheets
+
+on:
+  schedule:
+    - cron: '0 0 * * *'
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+    - name: Checkout
+      uses: actions/checkout@v3
+
+    - name: Configurar Python
+      uses: actions/setup-python@v4
+      with:
+        python-version: '3.9'
+
+    - name: Instalar dependencias
+      run: pip install google-analytics-data google-api-python-client google-auth
+
+    - name: Ejecutar script
+      env:
+        GA_SERVICE_ACCOUNT_JSON: ${{ secrets.GA_SERVICE_ACCOUNT_JSON }}
+        GA_PROPERTY_ID: ${{ secrets.GA_PROPERTY_ID }}
+        SPREADSHEET_ID: ${{ secrets.SPREADSHEET_ID }}
+      run: python extract_data.py
