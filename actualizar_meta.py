@@ -1,14 +1,7 @@
-"""
-actualizar_meta.py
-------------------
-Script de actualización diaria: descarga los últimos N días de Meta Ads
-y hace upsert en Google Sheets (no borra el histórico).
-Corregido: Normalización de decimales y tipos numéricos.
-"""
-
 import json
 import os
 import time
+import re
 from datetime import datetime, timedelta
 
 import gspread
@@ -27,8 +20,8 @@ META_APP_ID       = "794814423158870"
 AD_ACCOUNT_ID     = "act_122669098066867"
 SHEET_ID          = "1evv-YemzQfKFUr4mZyLEqne2ALqPD6v8rzFUlp68fcE"
 
-DIAS_ATRAS = 7  
-CHUNK_DAYS = 7
+DIAS_ATRAS = 105  
+CHUNK_DAYS = 15
 PAUSA_ENTRE_CHUNKS = 5
 
 RETRY_WAIT_INICIAL = 60
@@ -43,6 +36,19 @@ CODIGOS_REINTENTABLES = {2, 4, 17, 32, 613}
 
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
+
+# ── utilidades de limpieza y tipos ──────────────────────────
+
+def limpiar_num(val, default=0):
+    """Asegura que el valor sea un número, eliminando ruidos de formato."""
+    if val is None or val == "": return default
+    try:
+        # Si es string, limpiar caracteres no numéricos excepto punto y menos
+        if isinstance(val, str):
+            val = re.sub(r'[^\d.-]', '', val)
+        return float(val)
+    except:
+        return default
 
 # ── Utilidades de fechas ─────────────────────────────────────
 
@@ -123,14 +129,14 @@ def get_campaign_metrics(account, desde, hasta):
                 "fecha": i.get("date_start"),
                 "campaña": i.get("campaign_name"),
                 "adset": i.get("adset_name"),
-                "impresiones": int(i.get("impressions", 0)),
-                "clics": int(i.get("clicks", 0)),
-                "gasto": float(i.get("spend") or 0),
-                "alcance": int(i.get("reach", 0)),
-                "ctr": float(i.get("ctr") or 0),
-                "cpc": float(i.get("cpc") or 0),
-                "conversiones": conv,
-                "valor_conversiones": float(valor or 0),
+                "impresiones": int(limpiar_num(i.get("impressions"))),
+                "clics": int(limpiar_num(i.get("clicks"))),
+                "gasto": limpiar_num(i.get("spend")),
+                "alcance": int(limpiar_num(i.get("reach"))),
+                "ctr": limpiar_num(i.get("ctr")),
+                "cpc": limpiar_num(i.get("cpc")),
+                "conversiones": int(limpiar_num(conv)),
+                "valor_conversiones": limpiar_num(valor),
             })
     return pd.DataFrame(all_rows)
 
@@ -148,13 +154,13 @@ def get_creative_performance(account, desde, hasta):
                 "anuncio": i.get("ad_name"),
                 "adset": i.get("adset_name"),
                 "campaña": i.get("campaign_name"),
-                "impresiones": int(i.get("impressions", 0)),
-                "clics": int(i.get("clicks", 0)),
-                "gasto": float(i.get("spend") or 0),
-                "ctr": float(i.get("ctr") or 0),
-                "cpc": float(i.get("cpc") or 0),
-                "conversiones": conv,
-                "valor_conversiones": float(valor or 0),
+                "impresiones": int(limpiar_num(i.get("impressions"))),
+                "clics": int(limpiar_num(i.get("clicks"))),
+                "gasto": limpiar_num(i.get("spend")),
+                "ctr": limpiar_num(i.get("ctr")),
+                "cpc": limpiar_num(i.get("cpc")),
+                "conversiones": int(limpiar_num(conv)),
+                "valor_conversiones": limpiar_num(valor),
             })
     return pd.DataFrame(all_rows)
 
@@ -171,14 +177,14 @@ def get_breakdown(account, breakdown, desde, hasta, nivel="adset"):
                 "fecha": i.get("date_start"),
                 "campaña": i.get("campaign_name"),
                 "adset": i.get("adset_name"),
-                "impresiones": int(i.get("impressions", 0)),
-                "clics": int(i.get("clicks", 0)),
-                "gasto": float(i.get("spend") or 0),
-                "alcance": int(i.get("reach", 0)),
-                "ctr": float(i.get("ctr") or 0),
-                "cpc": float(i.get("cpc") or 0),
-                "conversiones": conv,
-                "valor_conversiones": float(valor or 0),
+                "impresiones": int(limpiar_num(i.get("impressions"))),
+                "clics": int(limpiar_num(i.get("clicks"))),
+                "gasto": limpiar_num(i.get("spend")),
+                "alcance": int(limpiar_num(i.get("reach"))),
+                "ctr": limpiar_num(i.get("ctr")),
+                "cpc": limpiar_num(i.get("cpc")),
+                "conversiones": int(limpiar_num(conv)),
+                "valor_conversiones": limpiar_num(valor),
                 "mercado": extraer_mercado(i.get("campaign_name")),
                 "tipo_campaña": extraer_tipo(i.get("campaign_name")),
             }
@@ -206,61 +212,65 @@ def extraer_tipo(nombre):
     if "REMARKETING" in n: return "Remarketing"
     return "Otro"
 
-# ── Upsert en Google Sheets (NORMALIZADO) ───────────────────
+# ── Upsert en Google Sheets (BLINDADO) ──────────────────────
 
 def upsert_sheet(sheet, df, nombre_pestaña, claves):
     if df.empty:
         log(f"  ⚠️ '{nombre_pestaña}': DataFrame vacío.")
         return
 
-    # Normalizar tipos en el nuevo DataFrame
+    # Definición de tipos para forzar consistencia
     cols_float = ["gasto", "valor_conversiones", "ctr", "cpc"]
     cols_int = ["impresiones", "clics", "alcance", "conversiones"]
 
+    # 1. Normalizar el DataFrame nuevo antes de nada
     for col in df.columns:
         if col in cols_float:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(float)
+            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0).astype(float)
         elif col in cols_int:
             df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
+        if col in claves:
+            df[col] = df[col].astype(str).str.strip()
 
-    for intento in range(3):
-        try:
-            ws = sheet.worksheet(nombre_pestaña)
-            existentes = ws.get_all_records()
+    try:
+        ws = sheet.worksheet(nombre_pestaña)
+        existentes = ws.get_all_records()
 
-            if not existentes:
-                ws.update([df.columns.tolist()] + df.fillna("").values.tolist(), value_input_option='USER_ENTERED')
-                log(f"  ✅ '{nombre_pestaña}': {len(df)} filas escritas.")
-                return
-
+        if existentes:
             df_exist = pd.DataFrame(existentes)
-
-            # Normalizar tipos en el DataFrame existente para comparación justa
+            
+            # 2. Normalizar el DataFrame que viene de Sheets (aquí suele romperse)
             for col in df.columns:
                 if col in df_exist.columns:
                     if col in cols_float:
-                        df_exist[col] = pd.to_numeric(df_exist[col], errors='coerce').fillna(0).astype(float)
+                        # Reemplazamos coma por punto por si la hoja está en formato europeo
+                        df_exist[col] = df_exist[col].astype(str).str.replace(',', '.')
+                        df_exist[col] = pd.to_numeric(df_exist[col], errors='coerce').fillna(0.0).astype(float)
                     elif col in cols_int:
                         df_exist[col] = pd.to_numeric(df_exist[col], errors='coerce').fillna(0).astype(int)
+                    if col in claves:
+                        df_exist[col] = df_exist[col].astype(str).str.strip()
 
-            # Normalizar claves como strings
-            for clave in claves:
-                if clave in df_exist.columns: df_exist[clave] = df_exist[clave].astype(str).str.strip()
-                if clave in df.columns: df[clave] = df[clave].astype(str).str.strip()
-
-            # Merge y eliminación de duplicados (mantenemos el último dato descargado)
+            # 3. Merge y eliminar duplicados (el nuevo dato pisa al viejo)
             df_merged = pd.concat([df_exist, df], ignore_index=True).drop_duplicates(subset=claves, keep="last")
-            df_merged = df_merged.sort_values(by=claves[0], ascending=False)
+        else:
+            df_merged = df
 
-            ws.clear()
-            # value_input_option='USER_ENTERED' es CRÍTICO para los decimales
-            ws.update([df_merged.columns.tolist()] + df_merged.fillna("").values.tolist(), value_input_option='USER_ENTERED')
-            log(f"  ✅ '{nombre_pestaña}': {len(df_merged)} filas totales.")
-            return
+        df_merged = df_merged.sort_values(by=claves[0], ascending=False)
 
-        except Exception as e:
-            log(f"  ⚠️ Intento {intento+1} fallido en '{nombre_pestaña}': {e}")
-            time.sleep(5)
+        # 4. Preparar para subir: Convertir NaNs a 0 o valores seguros, NO a "" (strings vacíos)
+        # Usamos un formato de lista de listas limpio
+        ws.clear()
+        
+        # IMPORTANTE: Enviamos los datos tal cual, USER_ENTERED hará el resto en Sheets
+        # pero nos aseguramos de que los floats lleven punto y no sean objetos raros
+        matriz_final = [df_merged.columns.tolist()] + df_merged.values.tolist()
+        
+        ws.update(matriz_final, value_input_option='USER_ENTERED')
+        log(f"  ✅ '{nombre_pestaña}': {len(df_merged)} filas totales actualizadas.")
+
+    except Exception as e:
+        log(f"  ⚠️ Fallo crítico en '{nombre_pestaña}': {e}")
 
 # ── Main ─────────────────────────────────────────────────────
 
