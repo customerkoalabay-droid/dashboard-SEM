@@ -258,15 +258,25 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
 
         df_merged = df_merged.sort_values(by=claves[0], ascending=False)
 
-        # 4. Preparar para subir: Convertir NaNs a 0 o valores seguros, NO a "" (strings vacíos)
-        # Usamos un formato de lista de listas limpio
+        # 4. Rellenar NaNs antes de subir para evitar errores de serialización
+        for col in df_merged.columns:
+            if col in cols_float:
+                df_merged[col] = df_merged[col].fillna(0.0)
+            elif col in cols_int:
+                df_merged[col] = df_merged[col].fillna(0)
+            else:
+                df_merged[col] = df_merged[col].fillna("")
+
         ws.clear()
-        
-        # IMPORTANTE: Enviamos los datos tal cual, USER_ENTERED hará el resto en Sheets
-        # pero nos aseguramos de que los floats lleven punto y no sean objetos raros
-        matriz_final = [df_merged.columns.tolist()] + df_merged.values.tolist()
-        
-        ws.update(matriz_final, value_input_option='USER_ENTERED')
+
+        # RAW envía floats como numberValue en la API, evitando que el locale
+        # español interprete el punto como separador de miles (12.34 → 12)
+        matriz_final = [df_merged.columns.tolist()] + [
+            [v.item() if hasattr(v, 'item') else v for v in row]
+            for row in df_merged.itertuples(index=False, name=None)
+        ]
+
+        ws.update(matriz_final, value_input_option='RAW')
         log(f"  ✅ '{nombre_pestaña}': {len(df_merged)} filas totales actualizadas.")
 
     except Exception as e:
