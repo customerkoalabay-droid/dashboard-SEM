@@ -20,7 +20,7 @@ META_APP_ID       = "794814423158870"
 AD_ACCOUNT_ID     = "act_122669098066867"
 SHEET_ID          = "1evv-YemzQfKFUr4mZyLEqne2ALqPD6v8rzFUlp68fcE"
 
-DIAS_ATRAS = 7  
+DIAS_ATRAS = 465
 CHUNK_DAYS = 15
 PAUSA_ENTRE_CHUNKS = 5
 
@@ -37,14 +37,17 @@ CODIGOS_REINTENTABLES = {2, 4, 17, 32, 613}
 def log(msg):
     print(f"[{datetime.now().strftime('%H:%M:%S')}] {msg}")
 
-# ── utilidades de limpieza y tipos ──────────────────────────
+# ── Utilidades de limpieza y tipos ───────────────────────────
 
 def limpiar_num(val, default=0):
     """Asegura que el valor sea un número, eliminando ruidos de formato."""
-    if val is None or val == "": return default
+    if val is None or val == "":
+        return default
     try:
-        # Si es string, limpiar caracteres no numéricos excepto punto y menos
         if isinstance(val, str):
+            # Primero reemplazamos coma decimal por punto (por si acaso)
+            # y luego eliminamos cualquier carácter que no sea dígito, punto o menos
+            val = val.strip().replace(',', '.')
             val = re.sub(r'[^\d.-]', '', val)
         return float(val)
     except:
@@ -117,7 +120,13 @@ def parsear_conversiones(insight):
     return conversiones, valor
 
 def get_campaign_metrics(account, desde, hasta):
-    fields = ["campaign_name", "adset_name", "impressions", "clicks", "spend", "reach", "ctr", "cpc", "actions", "action_values"]
+    # ── FIX: añadimos campaign_id y adset_id para deduplicar por ID estable ──
+    fields = [
+        "campaign_id", "campaign_name",
+        "adset_id", "adset_name",
+        "impressions", "clicks", "spend", "reach", "ctr", "cpc",
+        "actions", "action_values"
+    ]
     params_base = {"level": "adset", "time_increment": 1}
     all_rows = []
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
@@ -126,22 +135,48 @@ def get_campaign_metrics(account, desde, hasta):
         for i in items:
             conv, valor = parsear_conversiones(i)
             all_rows.append({
-                "fecha": i.get("date_start"),
-                "campaña": i.get("campaign_name"),
-                "adset": i.get("adset_name"),
-                "impresiones": int(limpiar_num(i.get("impressions"))),
-                "clics": int(limpiar_num(i.get("clicks"))),
-                "gasto": limpiar_num(i.get("spend")),
-                "alcance": int(limpiar_num(i.get("reach"))),
-                "ctr": limpiar_num(i.get("ctr")),
-                "cpc": limpiar_num(i.get("cpc")),
-                "conversiones": int(limpiar_num(conv)),
+                "fecha":              i.get("date_start"),
+                # IDs estables (no cambian al renombrar)
+                "campaign_id":        str(i.get("campaign_id", "")),
+                "adset_id":           str(i.get("adset_id", "")),
+                # Nombres (pueden cambiar, se actualizan automáticamente)
+                "campaña":            i.get("campaign_name"),
+                "adset":              i.get("adset_name"),
+                "impresiones":        int(limpiar_num(i.get("impressions"))),
+                "clics":              int(limpiar_num(i.get("clicks"))),
+                "gasto":              limpiar_num(i.get("spend")),
+                "alcance":            int(limpiar_num(i.get("reach"))),
+                "ctr":                limpiar_num(i.get("ctr")),
+                "cpc":                limpiar_num(i.get("cpc")),
+                "conversiones":       int(limpiar_num(conv)),
                 "valor_conversiones": limpiar_num(valor),
             })
-    return pd.DataFrame(all_rows)
+    df = pd.DataFrame(all_rows)
+
+    # ── FIX: deduplicar dentro de la propia respuesta de la API ──────────────
+    # Meta puede devolver la misma combinación fecha+adset_id bajo distintos
+    # nombres de campaña si hubo un renombre. Nos quedamos con el último
+    # (nombre más reciente), ordenando por fecha desc para que keep="last"
+    # coincida con la fila más reciente del chunk.
+    if not df.empty and "adset_id" in df.columns:
+        antes = len(df)
+        df = (df
+              .sort_values("fecha", ascending=True)
+              .drop_duplicates(subset=["fecha", "adset_id"], keep="last")
+              .reset_index(drop=True))
+        eliminados = antes - len(df)
+        if eliminados:
+            log(f"  🔁 Deduplicados {eliminados} registros duplicados en respuesta de API (renombre de campaña)")
+
+    return df
 
 def get_creative_performance(account, desde, hasta):
-    fields = ["ad_name", "adset_name", "campaign_name", "impressions", "clicks", "spend", "ctr", "cpc", "actions", "action_values"]
+    fields = [
+        "ad_id", "ad_name",
+        "adset_name", "campaign_name",
+        "impressions", "clicks", "spend", "ctr", "cpc",
+        "actions", "action_values"
+    ]
     params_base = {"level": "ad", "time_increment": 1}
     all_rows = []
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
@@ -150,22 +185,40 @@ def get_creative_performance(account, desde, hasta):
         for i in items:
             conv, valor = parsear_conversiones(i)
             all_rows.append({
-                "fecha": i.get("date_start"),
-                "anuncio": i.get("ad_name"),
-                "adset": i.get("adset_name"),
-                "campaña": i.get("campaign_name"),
-                "impresiones": int(limpiar_num(i.get("impressions"))),
-                "clics": int(limpiar_num(i.get("clicks"))),
-                "gasto": limpiar_num(i.get("spend")),
-                "ctr": limpiar_num(i.get("ctr")),
-                "cpc": limpiar_num(i.get("cpc")),
-                "conversiones": int(limpiar_num(conv)),
+                "fecha":              i.get("date_start"),
+                "ad_id":              str(i.get("ad_id", "")),
+                "anuncio":            i.get("ad_name"),
+                "adset":              i.get("adset_name"),
+                "campaña":            i.get("campaign_name"),
+                "impresiones":        int(limpiar_num(i.get("impressions"))),
+                "clics":              int(limpiar_num(i.get("clicks"))),
+                "gasto":              limpiar_num(i.get("spend")),
+                "ctr":                limpiar_num(i.get("ctr")),
+                "cpc":                limpiar_num(i.get("cpc")),
+                "conversiones":       int(limpiar_num(conv)),
                 "valor_conversiones": limpiar_num(valor),
             })
-    return pd.DataFrame(all_rows)
+    df = pd.DataFrame(all_rows)
+
+    # Deduplicar por ad_id estable
+    if not df.empty and "ad_id" in df.columns:
+        antes = len(df)
+        df = (df
+              .sort_values("fecha", ascending=True)
+              .drop_duplicates(subset=["fecha", "ad_id"], keep="last")
+              .reset_index(drop=True))
+        eliminados = antes - len(df)
+        if eliminados:
+            log(f"  🔁 creative_performance: {eliminados} duplicados eliminados por ad_id")
+
+    return df
 
 def get_breakdown(account, breakdown, desde, hasta, nivel="adset"):
-    fields = ["campaign_name", "adset_name", "impressions", "clicks", "spend", "reach", "ctr", "cpc", "actions", "action_values"]
+    fields = [
+        "campaign_name", "adset_name",
+        "impressions", "clicks", "spend", "reach", "ctr", "cpc",
+        "actions", "action_values"
+    ]
     params_base = {"level": nivel, "time_increment": 1, "breakdowns": breakdown}
     all_rows = []
     for chunk_desde, chunk_hasta in chunked_date_ranges(desde, hasta, CHUNK_DAYS):
@@ -174,19 +227,19 @@ def get_breakdown(account, breakdown, desde, hasta, nivel="adset"):
         for i in items:
             conv, valor = parsear_conversiones(i)
             row = {
-                "fecha": i.get("date_start"),
-                "campaña": i.get("campaign_name"),
-                "adset": i.get("adset_name"),
-                "impresiones": int(limpiar_num(i.get("impressions"))),
-                "clics": int(limpiar_num(i.get("clicks"))),
-                "gasto": limpiar_num(i.get("spend")),
-                "alcance": int(limpiar_num(i.get("reach"))),
-                "ctr": limpiar_num(i.get("ctr")),
-                "cpc": limpiar_num(i.get("cpc")),
-                "conversiones": int(limpiar_num(conv)),
+                "fecha":              i.get("date_start"),
+                "campaña":            i.get("campaign_name"),
+                "adset":              i.get("adset_name"),
+                "impresiones":        int(limpiar_num(i.get("impressions"))),
+                "clics":              int(limpiar_num(i.get("clicks"))),
+                "gasto":              limpiar_num(i.get("spend")),
+                "alcance":            int(limpiar_num(i.get("reach"))),
+                "ctr":                limpiar_num(i.get("ctr")),
+                "cpc":                limpiar_num(i.get("cpc")),
+                "conversiones":       int(limpiar_num(conv)),
                 "valor_conversiones": limpiar_num(valor),
-                "mercado": extraer_mercado(i.get("campaign_name")),
-                "tipo_campaña": extraer_tipo(i.get("campaign_name")),
+                "mercado":            extraer_mercado(i.get("campaign_name")),
+                "tipo_campaña":       extraer_tipo(i.get("campaign_name")),
             }
             if breakdown == ["age", "gender"]:
                 row["edad"], row["genero"] = i.get("age"), i.get("gender")
@@ -212,53 +265,70 @@ def extraer_tipo(nombre):
     if "REMARKETING" in n: return "Remarketing"
     return "Otro"
 
-# ── Upsert en Google Sheets (BLINDADO) ──────────────────────
+# ── Upsert en Google Sheets ──────────────────────────────────
 
 def upsert_sheet(sheet, df, nombre_pestaña, claves):
     if df.empty:
         log(f"  ⚠️ '{nombre_pestaña}': DataFrame vacío.")
         return
 
-    # Definición de tipos para forzar consistencia
-    cols_float = ["gasto", "valor_conversiones", "ctr", "cpc"]
-    cols_int = ["impresiones", "clics", "alcance", "conversiones"]
+    cols_float  = ["gasto", "valor_conversiones", "ctr", "cpc"]
+    cols_int    = ["impresiones", "clics", "alcance", "conversiones"]
+    # IDs siempre como string para evitar problemas de tipo
+    cols_str_id = ["campaign_id", "adset_id", "ad_id"]
 
-    # 1. Normalizar el DataFrame nuevo antes de nada
-    for col in df.columns:
-        if col in cols_float:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0.0).astype(float)
-        elif col in cols_int:
-            df[col] = pd.to_numeric(df[col], errors='coerce').fillna(0).astype(int)
-        if col in claves:
-            df[col] = df[col].astype(str).str.strip()
+    def normalizar_df(frame, es_existente=False):
+        """Normaliza tipos en un DataFrame (nuevo o leído de Sheets)."""
+        for col in frame.columns:
+            if col in cols_float:
+                if es_existente:
+                    # Sheets puede devolver "79,59" en locale europeo
+                    frame[col] = frame[col].astype(str).str.replace(',', '.', regex=False)
+                frame[col] = pd.to_numeric(frame[col], errors='coerce').fillna(0.0).astype(float)
+            elif col in cols_int:
+                if es_existente:
+                    frame[col] = frame[col].astype(str).str.replace(',', '.', regex=False)
+                frame[col] = pd.to_numeric(frame[col], errors='coerce').fillna(0).astype(int)
+            elif col in claves or col in cols_str_id:
+                frame[col] = frame[col].astype(str).str.strip()
+        return frame
 
     try:
         ws = sheet.worksheet(nombre_pestaña)
         existentes = ws.get_all_records()
 
+        # Normalizar df nuevo
+        df = normalizar_df(df.copy(), es_existente=False)
+
         if existentes:
             df_exist = pd.DataFrame(existentes)
-            
-            # 2. Normalizar el DataFrame que viene de Sheets (aquí suele romperse)
-            for col in df.columns:
-                if col in df_exist.columns:
-                    if col in cols_float:
-                        # Reemplazamos coma por punto por si la hoja está en formato europeo
-                        df_exist[col] = df_exist[col].astype(str).str.replace(',', '.')
-                        df_exist[col] = pd.to_numeric(df_exist[col], errors='coerce').fillna(0.0).astype(float)
-                    elif col in cols_int:
-                        df_exist[col] = pd.to_numeric(df_exist[col], errors='coerce').fillna(0).astype(int)
-                    if col in claves:
-                        df_exist[col] = df_exist[col].astype(str).str.strip()
+            df_exist = normalizar_df(df_exist, es_existente=True)
 
-            # 3. Merge y eliminar duplicados (el nuevo dato pisa al viejo)
-            df_merged = pd.concat([df_exist, df], ignore_index=True).drop_duplicates(subset=claves, keep="last")
+            # ── FIX: detectar si la hoja existente tiene las columnas clave ──
+            claves_ausentes = [k for k in claves if k not in df_exist.columns]
+            if claves_ausentes:
+                log(f"  ⚠️ '{nombre_pestaña}': columnas clave ausentes en hoja ({claves_ausentes}). "
+                    f"Reescribiendo con nuevo esquema...")
+                # Primer run post-fix: descartamos datos viejos y reescribimos
+                df_merged = df
+            else:
+                # Aseguramos que df_exist tenga las mismas columnas que df
+                # (añadimos las que falten con valor vacío)
+                for col in df.columns:
+                    if col not in df_exist.columns:
+                        df_exist[col] = "" if col not in cols_float + cols_int else 0
+
+                # Merge: el dato nuevo pisa al viejo (misma clave = mismo adset+fecha)
+                df_merged = (
+                    pd.concat([df_exist, df], ignore_index=True)
+                    .drop_duplicates(subset=claves, keep="last")
+                )
         else:
             df_merged = df
 
         df_merged = df_merged.sort_values(by=claves[0], ascending=False)
 
-        # 4. Rellenar NaNs antes de subir para evitar errores de serialización
+        # Rellenar NaNs antes de subir
         for col in df_merged.columns:
             if col in cols_float:
                 df_merged[col] = df_merged[col].fillna(0.0)
@@ -269,8 +339,8 @@ def upsert_sheet(sheet, df, nombre_pestaña, claves):
 
         ws.clear()
 
-        # RAW envía floats como numberValue en la API, evitando que el locale
-        # español interprete el punto como separador de miles (12.34 → 12)
+        # RAW envía floats como numberValue, evitando que el locale europeo
+        # interprete el punto como separador de miles
         matriz_final = [df_merged.columns.tolist()] + [
             [v.item() if hasattr(v, 'item') else v for v in row]
             for row in df_merged.itertuples(index=False, name=None)
@@ -290,24 +360,29 @@ def main():
     hasta = ayer.strftime("%Y-%m-%d")
 
     log(f"🚀 Iniciando del {desde} al {hasta}")
-    gc = conectar_sheets()
-    sheet = gc.open_by_key(SHEET_ID)
+    gc      = conectar_sheets()
+    sheet   = gc.open_by_key(SHEET_ID)
     account = conectar_meta()
 
-    # Ejecución de secciones
+    # ── campaign_metrics ────────────────────────────────────
+    # CLAVE: ahora usamos IDs estables en lugar de nombres de campaña/adset
     log("📥 Descargando campaign_metrics...")
     df_campaigns = get_campaign_metrics(account, desde, hasta)
-    upsert_sheet(sheet, df_campaigns, "campaign_metrics", claves=["fecha", "campaña", "adset"])
+    upsert_sheet(sheet, df_campaigns, "campaign_metrics",
+                 claves=["fecha", "campaign_id", "adset_id"])
 
+    # ── creative_performance ────────────────────────────────
     log("📥 Descargando creative_performance...")
     df_creatives = get_creative_performance(account, desde, hasta)
-    upsert_sheet(sheet, df_creatives, "creative_performance", claves=["fecha", "campaña", "anuncio"])
+    upsert_sheet(sheet, df_creatives, "creative_performance",
+                 claves=["fecha", "ad_id"])
 
+    # ── breakdowns ──────────────────────────────────────────
     breakdowns = [
-        ("demographics", ["age", "gender"], ["fecha", "campaña", "edad", "genero"]),
-        ("platforms", ["publisher_platform", "platform_position"], ["fecha", "campaña", "plataforma", "placement"]),
-        ("devices", ["impression_device"], ["fecha", "campaña", "dispositivo"]),
-        ("countries", ["country"], ["fecha", "campaña", "pais"]),
+        ("demographics", ["age", "gender"],                              ["fecha", "campaña", "edad", "genero"]),
+        ("platforms",    ["publisher_platform", "platform_position"],    ["fecha", "campaña", "plataforma", "placement"]),
+        ("devices",      ["impression_device"],                          ["fecha", "campaña", "dispositivo"]),
+        ("countries",    ["country"],                                    ["fecha", "campaña", "pais"]),
     ]
 
     for nombre, bdown, claves in breakdowns:
