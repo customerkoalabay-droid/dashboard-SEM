@@ -1,12 +1,11 @@
 name: Extraccion Inventario Shopify (Independiente)
 
 on:
-  workflow_dispatch: 
+  workflow_dispatch:
 
 jobs:
   extract_inventory:
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout del repositorio
         uses: actions/checkout@v4
@@ -18,7 +17,7 @@ jobs:
 
       - name: Instalar dependencias
         run: |
-          pip install requests pandas openpyxl
+          pip install requests pandas openpyxl gspread google-auth
 
       - name: Ejecutar actualización de inventario
         env:
