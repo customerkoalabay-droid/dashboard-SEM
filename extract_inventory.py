@@ -1,56 +1,76 @@
 import os
+import time
 import requests
 import pandas as pd
-import time
 
-SHOP_NAME = os.environ.get("SHOPIFY_STORE", "koalabay")
-ACCESS_TOKEN = os.environ.get("SHOPIFY_API_KEY") 
+# 1. Configuración de variables (las que ya tienes en GitHub Actions)
+SHOP = os.getenv("SHOPIFY_STORE", "koalabay")
+CLIENT_ID = os.getenv("SHOPIFY_API_KEY")      # Aquí va tu API Key / Client ID
+CLIENT_SECRET = os.getenv("SHOPIFY_API_SECRET") # Aquí va tu Client Secret
 API_VERSION = "2024-04"
+
+token = None
+token_expires_at = 0.0
+
+def get_token():
+    global token, token_expires_at
+    if token and time.time() < token_expires_at - 60:
+        return token
+
+    print(f"Solicitando nuevo token para {SHOP}...")
+    response = requests.post(
+        f"https://{SHOP}.myshopify.com/admin/oauth/access_token",
+        headers={"Content-Type": "application/x-www-form-urlencoded"},
+        data={
+            "grant_type": "client_credentials",
+            "client_id": CLIENT_ID,
+            "client_secret": CLIENT_SECRET,
+        },
+        timeout=30,
+    )
+    response.raise_for_status()
+    data = response.json()
+    token = data["access_token"]
+    # Si la respuesta no trae expires_in (algunas apps privadas), ponemos 1 hora por defecto
+    token_expires_at = time.time() + data.get("expires_in", 3600)
+    return token
 
 def get_all_inventory():
     all_levels = []
-    # Usamos el endpoint de inventory_levels
-    url = f"https://{SHOP_NAME}.myshopify.com/admin/api/{API_VERSION}/inventory_levels.json?limit=250"
-    headers = {
-        "X-Shopify-Access-Token": ACCESS_TOKEN,
-        "Content-Type": "application/json"
-    }
+    url = f"https://{SHOP}.myshopify.com/admin/api/{API_VERSION}/inventory_levels.json?limit=250"
     
-    print(f"Iniciando descarga de inventario para: {SHOP_NAME}...")
-
+    print("Iniciando descarga de inventario...")
+    
     while url:
+        headers = {
+            "Content-Type": "application/json",
+            "X-Shopify-Access-Token": get_token()
+        }
+        
         response = requests.get(url, headers=headers)
         
         if response.status_code == 200:
             data = response.json()
             levels = data.get('inventory_levels', [])
             all_levels.extend(levels)
+            print(f"Descargados {len(all_levels)} niveles...")
             
-            # Gestión de paginación por Link Header
+            # Paginación
             link_header = response.headers.get('Link')
             if link_header and 'rel="next"' in link_header:
                 url = link_header.split('<')[1].split('>')[0]
             else:
                 url = None
-                
         elif response.status_code == 429:
-            # Si llegamos al límite de Plus (raro con 250 items), esperamos
-            retry_after = int(response.headers.get("Retry-After", 2))
-            print(f"Límite de API alcanzado. Esperando {retry_after} segundos...")
-            time.sleep(retry_after)
+            time.sleep(2)
         else:
-            print(f"Error en la API: {response.status_code} - {response.text}")
+            print(f"Error: {response.status_code} - {response.text}")
             break
-
+            
     return pd.DataFrame(all_levels)
 
 if __name__ == "__main__":
-    df_inv = get_all_inventory()
-    
-    if not df_inv.empty:
-        # Guardamos en CSV o Excel según prefieras para GitHub Artifacts
-        output_file = "inventario_total_koalabay.csv"
-        df_inv.to_csv(output_file, index=False)
-        print(f"Proceso finalizado. Se han extraído {len(df_inv)} líneas de inventario.")
-    else:
-        print("No se extrajeron datos. Revisa las credenciales.")
+    df = get_all_inventory()
+    if not df.empty:
+        df.to_csv("inventario_total_koalabay.csv", index=False)
+        print("Archivo guardado con éxito.")
