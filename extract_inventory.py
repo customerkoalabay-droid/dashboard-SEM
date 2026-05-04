@@ -3,74 +3,102 @@ import time
 import requests
 import pandas as pd
 
-# 1. Configuración de variables (las que ya tienes en GitHub Actions)
-SHOP = os.getenv("SHOPIFY_STORE", "koalabay")
-CLIENT_ID = os.getenv("SHOPIFY_API_KEY")      # Aquí va tu API Key / Client ID
-CLIENT_SECRET = os.getenv("SHOPIFY_API_SECRET") # Aquí va tu Client Secret
+# --- CONFIGURACIÓN DE VARIABLES (Vienen del YAML) ---
+SHOP = os.getenv("SHOPIFY_STORE")
+CLIENT_ID = os.getenv("SHOPIFY_API_KEY")
+CLIENT_SECRET = os.getenv("SHOPIFY_API_SECRET")
 API_VERSION = "2024-04"
 
 token = None
 token_expires_at = 0.0
 
 def get_token():
+    """Obtiene un token temporal usando Client ID y Client Secret"""
     global token, token_expires_at
     if token and time.time() < token_expires_at - 60:
         return token
 
-    print(f"Solicitando nuevo token para {SHOP}...")
-    response = requests.post(
-        f"https://{SHOP}.myshopify.com/admin/oauth/access_token",
-        headers={"Content-Type": "application/x-www-form-urlencoded"},
-        data={
-            "grant_type": "client_credentials",
-            "client_id": CLIENT_ID,
-            "client_secret": CLIENT_SECRET,
-        },
-        timeout=30,
-    )
-    response.raise_for_status()
-    data = response.json()
-    token = data["access_token"]
-    # Si la respuesta no trae expires_in (algunas apps privadas), ponemos 1 hora por defecto
-    token_expires_at = time.time() + data.get("expires_in", 3600)
-    return token
+    url = f"https://{SHOP}.myshopify.com/admin/oauth/access_token"
+    print(f"Solicitando acceso para la tienda: {SHOP}...")
+    
+    try:
+        response = requests.post(
+            url,
+            headers={"Content-Type": "application/x-www-form-urlencoded"},
+            data={
+                "grant_type": "client_credentials",
+                "client_id": CLIENT_ID,
+                "client_secret": CLIENT_SECRET,
+            },
+            timeout=30,
+        )
+        response.raise_for_status()
+        data = response.json()
+        token = data["access_token"]
+        # Algunos flujos no devuelven expires_in, ponemos 1h por defecto
+        token_expires_at = time.time() + data.get("expires_in", 3600)
+        print("¡Token obtenido con éxito!")
+        return token
+    except Exception as e:
+        print(f"ERROR EN AUTENTICACIÓN: {e}")
+        if 'response' in locals():
+            print(f"Detalle del error: {response.text}")
+        return None
 
 def get_all_inventory():
+    """Descarga todos los niveles de inventario usando paginación"""
     all_levels = []
+    current_token = get_token()
+    if not current_token:
+        return pd.DataFrame()
+
     url = f"https://{SHOP}.myshopify.com/admin/api/{API_VERSION}/inventory_levels.json?limit=250"
     
-    print("Iniciando descarga de inventario...")
+    print("Iniciando descarga de niveles de inventario...")
     
     while url:
         headers = {
             "Content-Type": "application/json",
-            "X-Shopify-Access-Token": get_token()
+            "X-Shopify-Access-Token": current_token
         }
         
-        response = requests.get(url, headers=headers)
-        
-        if response.status_code == 200:
-            data = response.json()
-            levels = data.get('inventory_levels', [])
-            all_levels.extend(levels)
-            print(f"Descargados {len(all_levels)} niveles...")
+        try:
+            response = requests.get(url, headers=headers)
             
-            # Paginación
-            link_header = response.headers.get('Link')
-            if link_header and 'rel="next"' in link_header:
-                url = link_header.split('<')[1].split('>')[0]
+            if response.status_code == 200:
+                data = response.json()
+                levels = data.get('inventory_levels', [])
+                all_levels.extend(levels)
+                print(f"Total acumulado: {len(all_levels)} registros.")
+                
+                # Gestión de paginación (Link Header)
+                link_header = response.headers.get('Link')
+                if link_header and 'rel="next"' in link_header:
+                    url = link_header.split('<')[1].split('>')[0]
+                else:
+                    url = None
+            elif response.status_code == 429: # Rate Limit
+                print("Límite de API alcanzado, esperando 2 segundos...")
+                time.sleep(2)
             else:
-                url = None
-        elif response.status_code == 429:
-            time.sleep(2)
-        else:
-            print(f"Error: {response.status_code} - {response.text}")
+                print(f"Error en la descarga: {response.status_code}")
+                break
+        except Exception as e:
+            print(f"Error de conexión: {e}")
             break
             
     return pd.DataFrame(all_levels)
 
 if __name__ == "__main__":
-    df = get_all_inventory()
-    if not df.empty:
-        df.to_csv("inventario_total_koalabay.csv", index=False)
-        print("Archivo guardado con éxito.")
+    if not all([SHOP, CLIENT_ID, CLIENT_SECRET]):
+        print("ERROR: Faltan variables de entorno. Revisa los Secrets en GitHub.")
+    else:
+        df_inventory = get_all_inventory()
+        
+        if not df_inventory.empty:
+            filename = "inventario_total_koalabay.csv"
+            df_inventory.to_csv(filename, index=False)
+            print(f"--- PROCESO FINALIZADO ---")
+            print(f"Archivo generado: {filename} con {len(df_inventory)} filas.")
+        else:
+            print("No se extrajeron datos. Revisa los permisos (scopes) de la App.")
