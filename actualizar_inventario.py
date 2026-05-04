@@ -10,7 +10,7 @@ from google.oauth2.service_account import Credentials
 SHOP = os.getenv("SHOPIFY_STORE")
 CLIENT_ID = os.getenv("SHOPIFY_API_KEY")
 CLIENT_SECRET = os.getenv("SHOPIFY_API_SECRET")
-GOOGLE_CREDS_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT_JSON")  # ← AJUSTA al nombre que uses en tus otros scripts
+GOOGLE_CREDS_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT")  # ← AJUSTA al nombre que uses en tus otros scripts
 API_VERSION = "2025-01"
 
 SHEET_ID = "1j84VyucNRrRx7haLKm16ppRuaL28p5BaX75D4BHaqWs"
