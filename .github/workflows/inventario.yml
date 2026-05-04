@@ -20,24 +20,18 @@ jobs:
         run: |
           pip install requests pandas openpyxl
 
-      - name: Ejecutar script de inventario
+      - name: Ejecutar actualización de inventario
         env:
-          # Usamos los nuevos nombres de los Secrets
-          SHOPIFY_STORE: ${{ secrets.INV_SHOPIFY_STORE }}
-          SHOPIFY_API_KEY: ${{ secrets.INV_SHOPIFY_TOKEN }}
-          SHOPIFY_API_SECRET: ${{ secrets.INV_SHOPIFY_SECRET }}
-        run: |
-          SCRIPT_PATH=$(find . -name "extract_inventory.py" -print -quit)
-          if [ -z "$SCRIPT_PATH" ]; then
-            echo "ERROR: No se encontró el archivo."
-            exit 1
-          fi
-          python "$SCRIPT_PATH"
+          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
+          SHOPIFY_API_KEY: ${{ secrets.SHOPIFY_API_KEY }}
+          SHOPIFY_API_SECRET: ${{ secrets.SHOPIFY_API_SECRET }}
+          GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
+        run: python actualizar_inventario.py
 
-      - name: Subir reporte como artefacto
-        if: success()
+      - name: Subir CSV de inventario como artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: reporte-inventario-koalabay
+          name: inventario-koalabay-${{ github.run_id }}
           path: inventario_total_koalabay.csv
-          retention-days: 7
+          retention-days: 30
