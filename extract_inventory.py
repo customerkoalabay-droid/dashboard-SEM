@@ -3,9 +3,7 @@ import requests
 import pandas as pd
 import time
 
-# Variables de entorno según tu configuración
 SHOP_NAME = os.environ.get("SHOPIFY_STORE", "koalabay")
-# Nota: Asegúrate de que SHOPIFY_KEY sea tu Access Token (shpat_...)
 ACCESS_TOKEN = os.environ.get("SHOPIFY_API_KEY") 
 API_VERSION = "2024-04"
 
