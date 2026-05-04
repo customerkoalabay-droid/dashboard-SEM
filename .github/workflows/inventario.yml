@@ -1,7 +1,7 @@
 name: Extraccion Inventario Shopify
 
 on:
-  workflow_dispatch: # Permite ejecución manual desde la pestaña Actions
+  workflow_dispatch: 
 
 jobs:
   extract_inventory:
@@ -25,10 +25,25 @@ jobs:
           SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
           SHOPIFY_API_KEY: ${{ secrets.SHOPIFY_API_KEY }}
           SHOPIFY_API_SECRET: ${{ secrets.SHOPIFY_API_SECRET }}
-        run: python extract_inventory.py
+        run: |
+          # 1. Buscar el archivo ignorando si está en subcarpetas
+          SCRIPT_PATH=$(find . -name "extract_inventory.py" -print -quit)
+          
+          # 2. Si no lo encuentra, listar todo para debug y fallar con info
+          if [ -z "$SCRIPT_PATH" ]; then
+            echo "--- ERROR: Archivo no encontrado ---"
+            echo "Listando contenido del repositorio para depuración:"
+            ls -R
+            exit 1
+          fi
+          
+          # 3. Ejecutar el script donde sea que esté
+          echo "Archivo encontrado en: $SCRIPT_PATH"
+          python "$SCRIPT_PATH"
 
       - name: Subir reporte como artefacto
-        uses: actions/upload-artifact@v4 
+        if: success()
+        uses: actions/upload-artifact@v4
         with:
           name: reporte-inventario-koalabay
           path: inventario_total_koalabay.csv
