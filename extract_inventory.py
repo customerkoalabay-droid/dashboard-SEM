@@ -52,7 +52,7 @@ def get_all_inventory():
     if not current_token:
         return pd.DataFrame()
 
-    url = f"https://{SHOP}.myshopify.com/admin/api/{API_VERSION}/inventory_levels.json?limit=250"
+    url = f"https://{SHOP}.myshopify.com/admin/api/{API_VERSION}/inventory_levels.json?limit=50""
     
     print("Iniciando descarga de niveles de inventario...")
     
