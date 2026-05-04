@@ -22,14 +22,13 @@ jobs:
 
       - name: Ejecutar script de inventario
         env:
-          # Estas variables deben estar en Settings > Secrets > Actions
           SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
           SHOPIFY_API_KEY: ${{ secrets.SHOPIFY_API_KEY }}
           SHOPIFY_API_SECRET: ${{ secrets.SHOPIFY_API_SECRET }}
         run: python extract_inventory.py
 
       - name: Subir reporte como artefacto
-        uses: upload-artifact@v4
+        uses: actions/upload-artifact@v4 
         with:
           name: reporte-inventario-koalabay
           path: inventario_total_koalabay.csv
