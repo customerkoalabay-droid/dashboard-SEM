@@ -7,9 +7,9 @@ import gspread
 from google.oauth2.service_account import Credentials
 
 # --- CONFIGURACIÓN ---
-SHOP = os.getenv("SHOPIFY_STORE")
-CLIENT_ID = os.getenv("SHOPIFY_API_KEY")
-CLIENT_SECRET = os.getenv("SHOPIFY_API_SECRET")
+SHOP = os.getenv("INV_SHOPIFY_STORE")
+CLIENT_ID = os.getenv("INV_SHOPIFY_TOKEN")     # ← aquí va el Client ID
+CLIENT_SECRET = os.getenv("INV_SHOPIFY_SECRET") # ← aquí va el Client Secret
 GOOGLE_CREDS_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT")
 API_VERSION = "2025-01"
 
