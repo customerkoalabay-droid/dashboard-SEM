@@ -1,4 +1,4 @@
-name: Extraccion Inventario Shopify
+name: Extraccion Inventario Shopify (Independiente)
 
 on:
   workflow_dispatch: 
@@ -22,23 +22,16 @@ jobs:
 
       - name: Ejecutar script de inventario
         env:
-          SHOPIFY_STORE: ${{ secrets.SHOPIFY_STORE }}
-          SHOPIFY_API_KEY: ${{ secrets.SHOPIFY_API_KEY }}
-          SHOPIFY_API_SECRET: ${{ secrets.SHOPIFY_API_SECRET }}
+          # Usamos los nuevos nombres de los Secrets
+          SHOPIFY_STORE: ${{ secrets.INV_SHOPIFY_STORE }}
+          SHOPIFY_API_KEY: ${{ secrets.INV_SHOPIFY_TOKEN }}
+          SHOPIFY_API_SECRET: ${{ secrets.INV_SHOPIFY_SECRET }}
         run: |
-          # 1. Buscar el archivo ignorando si está en subcarpetas
           SCRIPT_PATH=$(find . -name "extract_inventory.py" -print -quit)
-          
-          # 2. Si no lo encuentra, listar todo para debug y fallar con info
           if [ -z "$SCRIPT_PATH" ]; then
-            echo "--- ERROR: Archivo no encontrado ---"
-            echo "Listando contenido del repositorio para depuración:"
-            ls -R
+            echo "ERROR: No se encontró el archivo."
             exit 1
           fi
-          
-          # 3. Ejecutar el script donde sea que esté
-          echo "Archivo encontrado en: $SCRIPT_PATH"
           python "$SCRIPT_PATH"
 
       - name: Subir reporte como artefacto
