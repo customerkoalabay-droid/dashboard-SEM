@@ -10,7 +10,7 @@ from google.oauth2.service_account import Credentials
 SHOP = os.getenv("SHOPIFY_STORE")
 CLIENT_ID = os.getenv("SHOPIFY_API_KEY")
 CLIENT_SECRET = os.getenv("SHOPIFY_API_SECRET")
-GOOGLE_CREDS_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT")  # ← AJUSTA al nombre que uses en tus otros scripts
+GOOGLE_CREDS_JSON = os.getenv("GOOGLE_SERVICE_ACCOUNT")
 API_VERSION = "2025-01"
 
 SHEET_ID = "1j84VyucNRrRx7haLKm16ppRuaL28p5BaX75D4BHaqWs"
@@ -21,7 +21,7 @@ token_expires_at = 0.0
 
 
 def get_token():
-    """Obtiene un token temporal usando Client ID y Client Secret"""
+    """Obtiene un token vía client_credentials grant"""
     global token, token_expires_at
     if token and time.time() < token_expires_at - 60:
         return token
@@ -44,7 +44,7 @@ def get_token():
         data = response.json()
         token = data["access_token"]
         token_expires_at = time.time() + data.get("expires_in", 3600)
-        print("¡Token obtenido con éxito!")
+        print(f"¡Token obtenido con éxito! Scopes concedidos: {data.get('scope', 'N/A')}")
         return token
     except Exception as e:
         print(f"ERROR EN AUTENTICACIÓN: {e}")
@@ -54,7 +54,6 @@ def get_token():
 
 
 def get_all_inventory_graphql():
-    """Descarga inventario completo vía GraphQL paginado por productVariants"""
     current_token = get_token()
     if not current_token:
         return pd.DataFrame()
@@ -91,10 +90,7 @@ def get_all_inventory_graphql():
               inventoryLevels(first: 20) {
                 edges {
                   node {
-                    location {
-                      id
-                      name
-                    }
+                    location { id name }
                     quantities(names: ["available", "on_hand", "committed"]) {
                       name
                       quantity
@@ -141,24 +137,15 @@ def get_all_inventory_graphql():
 
                 if not inv_levels:
                     all_rows.append({
-                        "variant_id": node["id"],
-                        "sku": node.get("sku"),
-                        "barcode": node.get("barcode"),
-                        "variant_title": node.get("title"),
-                        "price": node.get("price"),
+                        "variant_id": node["id"], "sku": node.get("sku"), "barcode": node.get("barcode"),
+                        "variant_title": node.get("title"), "price": node.get("price"),
                         "inventory_quantity_total": node.get("inventoryQuantity"),
                         "tracked": inv_item.get("tracked"),
-                        "product_id": product.get("id"),
-                        "product_title": product.get("title"),
-                        "product_handle": product.get("handle"),
-                        "vendor": product.get("vendor"),
-                        "product_type": product.get("productType"),
-                        "status": product.get("status"),
-                        "location_id": None,
-                        "location_name": None,
-                        "available": None,
-                        "on_hand": None,
-                        "committed": None,
+                        "product_id": product.get("id"), "product_title": product.get("title"),
+                        "product_handle": product.get("handle"), "vendor": product.get("vendor"),
+                        "product_type": product.get("productType"), "status": product.get("status"),
+                        "location_id": None, "location_name": None,
+                        "available": None, "on_hand": None, "committed": None,
                     })
                     continue
 
@@ -168,21 +155,14 @@ def get_all_inventory_graphql():
                     qty_map = {q["name"]: q["quantity"] for q in (lvl.get("quantities") or [])}
 
                     all_rows.append({
-                        "variant_id": node["id"],
-                        "sku": node.get("sku"),
-                        "barcode": node.get("barcode"),
-                        "variant_title": node.get("title"),
-                        "price": node.get("price"),
+                        "variant_id": node["id"], "sku": node.get("sku"), "barcode": node.get("barcode"),
+                        "variant_title": node.get("title"), "price": node.get("price"),
                         "inventory_quantity_total": node.get("inventoryQuantity"),
                         "tracked": inv_item.get("tracked"),
-                        "product_id": product.get("id"),
-                        "product_title": product.get("title"),
-                        "product_handle": product.get("handle"),
-                        "vendor": product.get("vendor"),
-                        "product_type": product.get("productType"),
-                        "status": product.get("status"),
-                        "location_id": loc.get("id"),
-                        "location_name": loc.get("name"),
+                        "product_id": product.get("id"), "product_title": product.get("title"),
+                        "product_handle": product.get("handle"), "vendor": product.get("vendor"),
+                        "product_type": product.get("productType"), "status": product.get("status"),
+                        "location_id": loc.get("id"), "location_name": loc.get("name"),
                         "available": qty_map.get("available"),
                         "on_hand": qty_map.get("on_hand"),
                         "committed": qty_map.get("committed"),
@@ -208,7 +188,6 @@ def get_all_inventory_graphql():
 
 
 def subir_a_sheets(df):
-    """Sube el DataFrame a la Sheet de Shopify, pestaña Inventario"""
     if not GOOGLE_CREDS_JSON:
         print("ERROR: Falta el secret de credenciales de Google.")
         return False
@@ -221,10 +200,8 @@ def subir_a_sheets(df):
         ]
         creds = Credentials.from_service_account_info(creds_dict, scopes=scopes)
         client = gspread.authorize(creds)
-
         spreadsheet = client.open_by_key(SHEET_ID)
 
-        # Crear la pestaña si no existe, o limpiarla si existe
         try:
             worksheet = spreadsheet.worksheet(TAB_NAME)
             worksheet.clear()
@@ -237,13 +214,9 @@ def subir_a_sheets(df):
             )
             print(f"Pestaña '{TAB_NAME}' creada.")
 
-        # Convertir todo a string para evitar problemas con tipos mixtos / NaN
         df_clean = df.fillna("").astype(str)
-
-        # Subir cabecera + datos
         data_to_upload = [df_clean.columns.tolist()] + df_clean.values.tolist()
         worksheet.update(values=data_to_upload, range_name="A1")
-
         print(f"✓ Subidas {len(df)} filas a la pestaña '{TAB_NAME}'.")
         return True
 
@@ -254,19 +227,14 @@ def subir_a_sheets(df):
 
 if __name__ == "__main__":
     if not all([SHOP, CLIENT_ID, CLIENT_SECRET]):
-        print("ERROR: Faltan variables de entorno de Shopify. Revisa los Secrets.")
+        print("ERROR: Faltan variables de entorno. Revisa los Secrets en GitHub.")
     else:
         df_inventory = get_all_inventory_graphql()
-
         if not df_inventory.empty:
-            # 1. Guardar CSV local (para el artifact del workflow)
             filename = "inventario_total_koalabay.csv"
             df_inventory.to_csv(filename, index=False)
             print(f"CSV generado: {filename} con {len(df_inventory)} filas.")
-
-            # 2. Subir a Google Sheets
             subir_a_sheets(df_inventory)
-
             print("--- PROCESO FINALIZADO ---")
         else:
-            print("No se extrajeron datos. Revisa los scopes de la App.")
+            print("No se extrajeron datos.")
