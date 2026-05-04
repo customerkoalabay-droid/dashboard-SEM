@@ -22,7 +22,7 @@ jobs:
       - name: Ejecutar actualización de inventario
         env:
           INV_SHOPIFY_STORE: ${{ secrets.INV_SHOPIFY_STORE }}
-          INV_SHOPIFY_KEY: ${{ secrets.INV_SHOPIFY_KEY }}
+          INV_SHOPIFY_TOKEN: ${{ secrets.INV_SHOPIFY_TOKEN }}
           INV_SHOPIFY_SECRET: ${{ secrets.INV_SHOPIFY_SECRET }}
           GOOGLE_SERVICE_ACCOUNT: ${{ secrets.GOOGLE_SERVICE_ACCOUNT }}
         run: python actualizar_inventario.py
