@@ -46,15 +46,17 @@ def get_token():
         return None
 
 def get_all_inventory():
-    """Descarga todos los niveles de inventario usando paginación"""
-    all_levels = []
+    """Descarga datos de inventario usando el endpoint de Inventory Items"""
+    all_data = []
     current_token = get_token()
     if not current_token:
         return pd.DataFrame()
 
-    url = f"https://{SHOP}.myshopify.com/admin/api/{API_VERSION}/inventory_levels.json?limit=50""
+    # Cambiamos a inventory_items que es más robusto para lecturas totales
+    # Nota: Este endpoint devuelve información sobre los productos/variantes
+    url = f"https://{SHOP}.myshopify.com/admin/api/{API_VERSION}/inventory_items.json?limit=50"
     
-    print("Iniciando descarga de niveles de inventario...")
+    print("Cambiando estrategia: Consultando Inventory Items...")
     
     while url:
         headers = {
@@ -67,28 +69,29 @@ def get_all_inventory():
             
             if response.status_code == 200:
                 data = response.json()
-                levels = data.get('inventory_levels', [])
-                all_levels.extend(levels)
-                print(f"Total acumulado: {len(all_levels)} registros.")
+                # El campo aquí se llama inventory_items
+                items = data.get('inventory_items', [])
+                all_data.extend(items)
+                print(f"Total acumulado: {len(all_data)} items...")
                 
-                # Gestión de paginación (Link Header)
+                # Paginación
                 link_header = response.headers.get('Link')
                 if link_header and 'rel="next"' in link_header:
                     url = link_header.split('<')[1].split('>')[0]
                 else:
                     url = None
-            elif response.status_code == 429: # Rate Limit
-                print("Límite de API alcanzado, esperando 2 segundos...")
-                time.sleep(2)
+            elif response.status_code == 422:
+                print("Error 422 persistente: Intentando acceder vía GraphQL...")
+                # Si falla aquí, el problema es que Shopify Plus exige GraphQL para esta cuenta
+                return get_inventory_via_graphql(current_token)
             else:
-                print(f"Error en la descarga: {response.status_code}")
+                print(f"Error en la descarga: {response.status_code} - {response.text}")
                 break
         except Exception as e:
             print(f"Error de conexión: {e}")
             break
             
-    return pd.DataFrame(all_levels)
-
+    return pd.DataFrame(all_data)
 if __name__ == "__main__":
     if not all([SHOP, CLIENT_ID, CLIENT_SECRET]):
         print("ERROR: Faltan variables de entorno. Revisa los Secrets en GitHub.")
